@@ -32,3 +32,5 @@ Look at changes on Fredde's phone over wireless debugging (`adb mdns services`, 
 ## Releases
 
 Every push to `master` runs `.github/workflows/release.yml`: tests, a signed release APK, and a GitHub Release `v0.1.<commit count>`. The version comes from the commit count (`-PversionCode`, `-PversionName`), so there are no bump commits. Release notes are the commit subjects since the last tag, so write subjects a person wants to read. `app/tester.jks` is a tester key kept in the repo so each release installs over the last.
+
+The app updates itself from those releases, DailyDash's updater copied over (`data/update`, `AppUpdateViewModel`): it looks for `Weave-<versionName>-vc<versionCode>.apk` on the latest release, checks while the app is open and every few hours in the background (`AppUpdateWorker`), installs through PackageInstaller and shows What's New after the relaunch. Settings → Updates, the update sheet and What's New are drawn in Weave's rooms in `UpdateTone`.

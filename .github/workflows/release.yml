@@ -50,7 +50,8 @@ jobs:
         run: |
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
           ./gradlew :app:assembleRelease -PversionCode=${{ steps.version.outputs.code }} -PversionName=${{ steps.version.outputs.name }}
-          cp app/build/outputs/apk/release/app-release.apk "Weave-${{ steps.version.outputs.name }}.apk"
+          # the in-app updater looks for Weave-<versionName>-vc<versionCode>.apk
+          cp app/build/outputs/apk/release/app-release.apk "Weave-${{ steps.version.outputs.name }}-vc${{ steps.version.outputs.code }}.apk"
 
       - name: Notes
         run: |
@@ -58,10 +59,11 @@ jobs:
           range=${prev:+$prev..}HEAD
           git log $range --no-merges --pretty='- %s' > notes.md
           [ -s notes.md ] || echo "- ${{ github.event.head_commit.message || 'Build' }}" > notes.md
+          echo "<!-- weave-version: ${{ steps.version.outputs.name }} vc${{ steps.version.outputs.code }} -->" >> notes.md
 
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.version.outputs.name }}" "Weave-${{ steps.version.outputs.name }}.apk" \
+          gh release create "v${{ steps.version.outputs.name }}" "Weave-${{ steps.version.outputs.name }}-vc${{ steps.version.outputs.code }}.apk" \
             --title "Weave ${{ steps.version.outputs.name }}" --notes-file notes.md --target "$GITHUB_SHA"

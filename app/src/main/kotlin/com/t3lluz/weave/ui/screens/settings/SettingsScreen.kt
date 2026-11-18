@@ -42,7 +42,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
-import com.t3lluz.weave.BuildConfig
+import com.t3lluz.weave.data.update.info
+import com.t3lluz.weave.data.update.prettyVersion
+import com.t3lluz.weave.data.update.updateAvailable
+import com.t3lluz.weave.ui.theme.UpdateTone
+import com.t3lluz.weave.ui.viewmodel.AppUpdateViewModel
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
 import com.t3lluz.weave.data.local.SettingsRepository
 import com.t3lluz.weave.ui.components.AiAccessBadge
 import com.t3lluz.weave.ui.components.AiProviderLogo
@@ -75,6 +81,8 @@ class SettingsViewModel @Inject constructor(val settings: SettingsRepository) : 
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onAi: () -> Unit,
+    onUpdates: () -> Unit,
+    updates: AppUpdateViewModel,
     viewModel: SettingsViewModel = hiltViewModel(),
     ai: AiSetupViewModel = hiltViewModel(),
 ) {
@@ -148,12 +156,28 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Weave ${BuildConfig.VERSION_NAME}",
-            fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextTertiary,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        )
+        Spacer(Modifier.height(6.dp))
+        val updateState by updates.state.collectAsState()
+        val ready = updateState.info?.takeIf { updateState.updateAvailable }
+        HealthSection(tone = UpdateTone, modifier = Modifier.clip(RoundedCornerShape(28.dp)).clickable { haptics.tick(); onUpdates() }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(AppIcons.Download, null, tint = UpdateTone, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("Updates", style = HealthDisplay, fontSize = 19.sp, color = UpdateTone)
+                    }
+                    Text(
+                        if (ready != null) "Weave ${prettyVersion(ready.versionName)} is ready" else "Weave ${updates.currentVersionName} · release notes",
+                        fontSize = 13.sp, color = if (ready != null) TextPrimary else TextSecondary, lineHeight = 18.sp,
+                    )
+                }
+                if (ready != null) Box(Modifier.padding(end = 8.dp).size(8.dp).clip(CircleShape).background(UpdateTone))
+                Icon(AppIcons.ChevronRight, null, tint = TextTertiary, modifier = Modifier.size(18.dp))
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
         Text(
             "The laptop's side is tandem. Screen, sound and touches go straight between the two over Tailscale.",
             fontSize = 12.sp, color = TextTertiary, lineHeight = 16.sp,

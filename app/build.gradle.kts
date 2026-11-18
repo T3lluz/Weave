@@ -107,6 +107,9 @@ dependencies {
     // Frosted glass over the laptop's picture
     implementation(libs.haze)
 
+    // The background check for a new release (in-app updates)
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub on the JVM; the real one lets the parsers be tested.
     testImplementation("org.json:json:20240303")

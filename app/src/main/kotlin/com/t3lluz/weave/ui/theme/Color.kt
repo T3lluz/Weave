@@ -119,6 +119,9 @@ val LinkShortcutTone = Color(0xFFF5C451)
 /** The AI: it makes the shortcuts, so it wears their colour. */
 val AiTone = LinkShortcutTone
 
+/** Updates: the one tone Settings had left. */
+val UpdateTone = HealthBodyTone
+
 /** Sleep stages: shades of the sleep indigo, deep darkest, with awake the one warm note. */
 val SleepStageAwake = Color(0xFFE8A28C)
 val SleepStageRem = Color(0xFFA9B2FF)
