@@ -1,5 +1,8 @@
 package com.t3lluz.weave.ui.screens.link
 
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.foundation.Canvas
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.SurfaceTexture
@@ -92,6 +95,8 @@ internal fun LinkPreview(
     modifier: Modifier = Modifier,
     /** Asks for the picture again after it stopped with [error]. */
     onRetry: () -> Unit = { session.retryVideo() },
+    /** Draw the pointer here, ahead of the picture, which leaves the laptop's own out ([LocalPointer]). */
+    drawPointer: Boolean = false,
 ) {
     val video = session.video
     val size by video.size.collectAsState()
@@ -158,8 +163,18 @@ internal fun LinkPreview(
     BoxWithConstraints(modifier.clipToBounds()) {
         val aspect = if (size.first > 0 && size.second > 0) size.first.toFloat() / size.second else 16f / 9f
         geometry.layout(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), aspect, zoom, fill)
-        LaunchedEffect(geometry, session) {
-            while (true) withFrameNanos { geometry.follow(session.cursorX, session.cursorY) }
+        // the view follows the pointer: the one drawn here when there is one, as it is where the finger put it
+        val pointer = session.localPointer
+        val pointerTick = remember { mutableLongStateOf(0L) }
+        LaunchedEffect(geometry, session, drawPointer) {
+            while (true) withFrameNanos {
+                if (drawPointer && pointer.shown) {
+                    geometry.follow(pointer.x, pointer.y)
+                    if (pointerTick.longValue != pointer.version) pointerTick.longValue = pointer.version
+                } else {
+                    geometry.follow(session.cursorX, session.cursorY)
+                }
+            }
         }
         val fitW = geometry.fitW
         val fitH = geometry.fitH
@@ -231,6 +246,20 @@ internal fun LinkPreview(
             )
         }
 
+        // the pointer, drawn where the finger has put it; the picture catches up under it
+        if (drawPointer) {
+            val monW = session.state.collectAsState().value.shownMonitor?.let { m -> (m.layoutWidth.takeIf { it > 0 } ?: m.width).toFloat() } ?: 1920f
+            Canvas(Modifier.fillMaxSize()) {
+                pointerTick.longValue
+                if (!pointer.shown || !live || waiting || still != null) return@Canvas
+                val at = geometry.toBox(pointer.x, pointer.y)
+                // a laptop pointer is about 24 of its pixels tall: that, at the picture's scale, kept easy to see
+                val scale = geometry.fitW * geometry.zoomState.floatValue / monW
+                val tall = (24f * scale).coerceIn(15.dp.toPx(), 26.dp.toPx())
+                drawPointer(at, tall)
+            }
+        }
+
         // the cover lifts when the first frame is decoded
         AnimatedVisibility(visible = !live && still == null, enter = fadeIn(AppMotion.Link.leave()), exit = fadeOut(AppMotion.Link.picture())) {
             Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -294,4 +323,25 @@ internal class LinkTextureView(context: Context, private val video: LinkVideo) :
 
     /** False keeps the texture: the decoder draws into it across views. */
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = surface !== video.texture
+}
+
+/** The classic arrow, its tip at [tip], [tall] high: white with a dark edge and a soft shadow, as a desktop draws it. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPointer(tip: androidx.compose.ui.geometry.Offset, tall: Float) {
+    val k = tall / 19.5f
+    val arrow = androidx.compose.ui.graphics.Path().apply {
+        moveTo(tip.x, tip.y)
+        lineTo(tip.x, tip.y + 17f * k)
+        lineTo(tip.x + 4.2f * k, tip.y + 13f * k)
+        lineTo(tip.x + 7.2f * k, tip.y + 19.5f * k)
+        lineTo(tip.x + 9.8f * k, tip.y + 18.4f * k)
+        lineTo(tip.x + 6.9f * k, tip.y + 12.1f * k)
+        lineTo(tip.x + 12.4f * k, tip.y + 12.1f * k)
+        close()
+    }
+    translate(1.2f * k, 1.6f * k) { drawPath(arrow, androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.35f)) }
+    drawPath(arrow, androidx.compose.ui.graphics.Color.White)
+    drawPath(
+        arrow, androidx.compose.ui.graphics.Color.Black,
+        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.2f * k, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+    )
 }

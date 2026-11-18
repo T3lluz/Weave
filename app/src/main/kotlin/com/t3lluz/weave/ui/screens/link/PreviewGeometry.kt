@@ -71,6 +71,12 @@ internal class PreviewGeometry {
         targetY = clamp(targetY - pan.y / (fitH * zoom), visibleY())
     }
 
+    /** A point of the laptop's monitor, 0..1, as a point of the box: where to draw it over the picture. */
+    fun toBox(x: Float, y: Float): Offset = Offset(
+        boxW / 2 + (x - centerX.floatValue) * fitW * zoomState.floatValue,
+        boxH / 2 + (y - centerY.floatValue) * fitH * zoomState.floatValue,
+    )
+
     /** A point of the box as a point of the laptop's monitor, 0..1, or null beside the picture. */
     fun toScreen(at: Offset): Offset? {
         val x = centerX.floatValue + (at.x - boxW / 2) / (fitW * zoom)

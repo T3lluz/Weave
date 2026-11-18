@@ -192,6 +192,33 @@ fun LinkScreen(
             bars.show(WindowInsetsCompat.Type.systemBars())
         }
     }
+    // Copied on the phone, there to paste on the laptop, while the two are kept in step. Android lets only
+    // the app in front read the clipboard: this listens while the remote is up, and looks again each time
+    // it comes back (copied in another app). The time a clip was made is read first, so the clipboard
+    // itself (and Android's "pasted from" note) is only read when there is something new.
+    val syncing = online && config.clipSync && LinkSession.CLIP_SYNC in state.caps
+    val resumedNow = rememberIsResumed()
+    DisposableEffect(syncing, resumedNow) {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        var stamp = -1L
+        fun look() {
+            val desc = cm.primaryClipDescription ?: return
+            if (desc.timestamp == stamp) return
+            stamp = desc.timestamp
+            if (!desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_PLAIN) && !desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_HTML)) return
+            val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+            if (text.isNotEmpty() && text != session.clipSynced) session.copyToLaptop(text, quiet = true)
+        }
+        val listener = android.content.ClipboardManager.OnPrimaryClipChangedListener { look() }
+        if (syncing && resumedNow) {
+            // what is there when it starts stays put: only what is copied from here on goes over
+            stamp = cm.primaryClipDescription?.timestamp ?: -1L
+            if (session.clipSynced == null) session.clipSynced = ""
+            cm.addPrimaryClipChangedListener(listener)
+        }
+        onDispose { cm.removePrimaryClipChangedListener(listener) }
+    }
+
     // Looking for laptops while there is none to show; once connected, one look keeps the saved ticket current.
     LaunchedWhileResumed(online) {
         viewModel.findLaptops()
@@ -203,25 +230,49 @@ fun LinkScreen(
 
     val autoKeyboard by rememberUpdatedState(config.autoKeyboard)
     val imeUp by rememberUpdatedState(imeVisible)
+    // autocorrect stays out of terminals: a corrected command is a wrong one
+    var inTerminal by remember { mutableStateOf(false) }
+    // whether the last click was in a text field, so only a click into one raises the keyboard
+    var wasInField by remember { mutableStateOf(false) }
     LaunchedEffect(session) {
         viewModel.events.collect { event ->
             when (event) {
                 is LinkEvent.Toast -> toast = event.message
-                is LinkEvent.TextFocus -> if (autoKeyboard) {
-                    if (event.focused && !imeUp) {
-                        raisedForField = true
-                        keyView?.showKeyboard()
-                    } else if (!event.focused && raisedForField) {
-                        raisedForField = false
-                        keyView?.hideKeyboard()
+                is LinkEvent.TextFocus -> {
+                    // a click moved the laptop's cursor: what the keyboard had typed is no longer where it was
+                    keyView?.reset()
+                    inTerminal = event.terminal
+                }
+                else -> Unit
+            }
+            when (event) {
+                // The laptop looks after every click and says whether a text field has focus, each time.
+                // The keyboard rises only when a click moves into a text field from somewhere you don't
+                // type: clicking around inside a field, or an app that keeps one focused, never brings
+                // back a keyboard that was put away.
+                is LinkEvent.TextFocus -> {
+                    val into = event.focused && !wasInField
+                    wasInField = event.focused
+                    if (autoKeyboard) {
+                        if (into && !imeUp) {
+                            raisedForField = true
+                            keyView?.showKeyboard()
+                        } else if (!event.focused && raisedForField) {
+                            raisedForField = false
+                            keyView?.hideKeyboard()
+                        }
                     }
                 }
-                is LinkEvent.Clipboard -> if (event.text.isEmpty()) {
+                // copied on the laptop while the two are kept in step: here too, without a word
+                is LinkEvent.Clipboard -> if (event.sync) {
+                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
+                } else if (event.text.isEmpty()) {
                     toast = "Nothing is copied on $laptopName"
                 } else {
                     clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
                     toast = "Copied from $laptopName"
                 }
+                is LinkEvent.Toast -> Unit
             }
         }
     }
@@ -282,6 +333,10 @@ fun LinkScreen(
                 }
             },
             fetchClipboard = { session.askClipboard() },
+            clipSync = { on ->
+                session.setClipSync(on)
+                toast = if (on) "What you copy here or on $laptopName is there on both" else "The clipboards go their own way again"
+            },
         )
     }
 
@@ -321,6 +376,7 @@ fun LinkScreen(
             update = { view ->
                 view.onText = ::typed
                 view.onKey = ::pressed
+                view.autocorrect = config.autocorrect && !inTerminal
             },
             modifier = Modifier.size(1.dp).alpha(0f),
         )
@@ -350,6 +406,7 @@ internal class LinkActions(
     val phoneAudio: (Boolean) -> Unit,
     val sendClipboard: () -> Unit,
     val fetchClipboard: () -> Unit,
+    val clipSync: (Boolean) -> Unit,
 )
 
 // ── upright: screen on top, trackpad under it ──────────────────────────────────
@@ -463,6 +520,7 @@ private fun Upright(
                         session = session, geometry = geometry,
                         zoom = viewModel.zoom, fill = config.fillPreview,
                         error = state.videoError, note = if (reconnecting) "Reconnecting" else null,
+                        drawPointer = config.localPointer && LinkSession.LOCAL_CURSOR in state.caps,
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.Black)
@@ -537,6 +595,11 @@ private fun Upright(
                     DropdownMenu(expanded = clipMenu, onDismissRequest = { clipMenu = false }, modifier = Modifier.background(Surface)) {
                         MenuRow("Send what's copied here to $laptopName", AppIcons.ClipboardCopy) { clipMenu = false; actions.sendClipboard() }
                         MenuRow("Copy what's copied on $laptopName", AppIcons.ClipboardPaste) { clipMenu = false; actions.fetchClipboard() }
+                        if (LinkSession.CLIP_SYNC in state.caps) {
+                            MenuRow(if (config.clipSync) "Stop keeping them in sync" else "Keep both clipboards in sync", AppIcons.Repeat) {
+                                clipMenu = false; actions.clipSync(!config.clipSync)
+                            }
+                        }
                     }
                 }
                 DockTile(AppIcons.Ellipsis, "More", TextSecondary, last, Modifier.weight(1f)) { onMore() }
@@ -583,6 +646,7 @@ private fun Sideways(
         } else LinkPreview(
             session = session, geometry = geometry, zoom = 1f, fill = false, error = state.videoError,
             note = if (state.status == LinkStatus.Reconnecting) "Reconnecting" else null,
+            drawPointer = config.localPointer && LinkSession.LOCAL_CURSOR in state.caps,
             modifier = Modifier
                 .fillMaxSize()
                 .hazeSource(hazeState)

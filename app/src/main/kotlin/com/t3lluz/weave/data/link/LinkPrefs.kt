@@ -34,6 +34,12 @@ data class LinkConfig(
     val showPicture: Boolean = true,
     /** The shortcuts over the trackpad are shown. Off, the trackpad has their room. */
     val showShortcuts: Boolean = true,
+    /** The phone draws the pointer itself, where the finger puts it, and the laptop's is left out of the picture. */
+    val localPointer: Boolean = true,
+    /** The phone's keyboard corrects and suggests words as it does in any app; never in a terminal. */
+    val autocorrect: Boolean = false,
+    /** What is copied on either side is there to paste on the other. */
+    val clipSync: Boolean = false,
 )
 
 /**
@@ -73,6 +79,9 @@ class LinkPrefs @Inject constructor(
             putBoolean("levelSound", next.levelSound)
             putBoolean("showPicture", next.showPicture)
             putBoolean("showShortcuts", next.showShortcuts)
+            putBoolean("localPointer", next.localPointer)
+            putBoolean("autocorrect", next.autocorrect)
+            putBoolean("clipSync", next.clipSync)
         }
     }
 
@@ -90,6 +99,9 @@ class LinkPrefs @Inject constructor(
             levelSound = prefs.getBoolean("levelSound", d.levelSound),
             showPicture = prefs.getBoolean("showPicture", d.showPicture),
             showShortcuts = prefs.getBoolean("showShortcuts", d.showShortcuts),
+            localPointer = prefs.getBoolean("localPointer", d.localPointer),
+            autocorrect = prefs.getBoolean("autocorrect", d.autocorrect),
+            clipSync = prefs.getBoolean("clipSync", d.clipSync),
         )
     }
 

@@ -107,10 +107,10 @@ internal fun monitorUnder(monitors: List<LinkMonitor>, p: LinkPointer?): LinkMon
 
 sealed interface LinkEvent {
     data class Toast(val message: String) : LinkEvent
-    /** A click on the laptop landed in (or left) something you type into. */
-    data class TextFocus(val focused: Boolean) : LinkEvent
-    /** The laptop's clipboard, asked for or pushed. */
-    data class Clipboard(val text: String) : LinkEvent
+    /** A click on the laptop landed in (or left) something you type into; [terminal] when it is a terminal. */
+    data class TextFocus(val focused: Boolean, val terminal: Boolean = false) : LinkEvent
+    /** The laptop's clipboard, asked for, or sent by itself while the two are kept in step ([sync]). */
+    data class Clipboard(val text: String, val sync: Boolean = false) : LinkEvent
 }
 
 /**
@@ -127,7 +127,10 @@ class LinkSession @Inject constructor(
 
     val video = LinkVideo().also { v ->
         // the status pill names the new monitor when its picture lands, with the swipe
-        v.onSettled = { _state.update { it.copy(shown = it.monitor) } }
+        v.onSettled = {
+            _state.update { it.copy(shown = it.monitor) }
+            shownChanged()
+        }
     }
     private val audio = LinkAudio()
 
@@ -140,6 +143,18 @@ class LinkSession @Inject constructor(
     @Volatile private var catalogAsked = 0L
 
     /** The laptop's pointer on its desk, while the picture is off and the laptop reports it. */
+    /**
+     * Tells [localPointer] which monitor the laptop's reports are about, and its size, each time
+     * that may have changed. That is the monitor the laptop named in its last "video" message,
+     * not the one on screen: a switch lands on screen a little later, and the first report about
+     * the new monitor comes before it does.
+     */
+    private fun shownChanged() {
+        val st = _state.value
+        val m = st.monitors.firstOrNull { it.name == st.monitor } ?: st.shownMonitor
+        localPointer.onMonitor(m?.name, (m?.layoutWidth?.takeIf { it > 0 } ?: m?.width ?: 1).toFloat(), (m?.layoutHeight?.takeIf { it > 0 } ?: m?.height ?: 1).toFloat())
+    }
+
     private val _pointer = MutableStateFlow<LinkPointer?>(null)
     val pointer: StateFlow<LinkPointer?> = _pointer
 
@@ -147,6 +162,12 @@ class LinkSession @Inject constructor(
     val events: SharedFlow<LinkEvent> = _events
 
     /** Where the laptop's pointer is on the monitor shown, 0..1; read each frame by the preview. */
+    /** The pointer the phone draws over the picture, ahead of it (see [LocalPointer]). */
+    val localPointer = LocalPointer()
+
+    /** Whether the phone draws the pointer: asked for, and this tandem leaves it out of the picture. */
+    val drawsPointer: Boolean get() = prefs.config.value.localPointer && LOCAL_CURSOR in _state.value.caps
+
     @Volatile var cursorX = 0.5f
         private set
     @Volatile var cursorY = 0.5f
@@ -210,7 +231,8 @@ class LinkSession @Inject constructor(
                 writer = Thread({ write(out) }, "link-out").apply { isDaemon = true; start() }
                 sendJson(
                     JSONObject().put("t", "hello").put("token", prefs.token).put("ticket", cfg.ticket)
-                        .put("name", Build.MODEL).put("ver", 3).put("net", network()),
+                        .put("name", Build.MODEL).put("ver", 3).put("net", network())
+                        .put("cursor", if (cfg.localPointer) "local" else "laptop"),
                 )
                 read(DataInputStream(s.getInputStream().buffered(1 shl 16)))
             } catch (e: SocketTimeoutException) {
@@ -385,6 +407,7 @@ class LinkSession @Inject constructor(
                     readyToHear()
                 }
                 sendJson(JSONObject().put("t", "adb").put("ips", JSONArray(ownAddresses())))
+                if (syncsClipboard) send("""{"t":"clip_sync","on":true}""")
                 ping()
             }
             "video" -> {
@@ -420,13 +443,18 @@ class LinkSession @Inject constructor(
                         videoError = if (on) null else m.optString("error").ifBlank { null },
                     )
                 }
+                shownChanged()
             }
             "cur" -> {
                 cursorX = m.optDouble("x", 0.5).toFloat()
                 cursorY = m.optDouble("y", 0.5).toFloat()
+                localPointer.report(cursorX, cursorY, android.os.SystemClock.uptimeMillis())
             }
             "ptr" -> _pointer.value = LinkPointer(m.optDouble("x").toFloat(), m.optDouble("y").toFloat())
-            "monitors" -> m.optJSONArray("monitors")?.let { a -> _state.update { it.copy(monitors = monitors(a)) } }
+            "monitors" -> m.optJSONArray("monitors")?.let { a ->
+                _state.update { it.copy(monitors = monitors(a)) }
+                shownChanged()
+            }
             // the list first, then the apps' icons a few at a time; both are read away from this
             // thread, which carries the picture, and dropped if the link changed meanwhile
             "catalog" -> offThread { mine -> catalogOf(m).let { c -> if (mine == generation) _catalog.value = c } }
@@ -441,12 +469,19 @@ class LinkSession @Inject constructor(
                 setLaptopSound(on)
                 _events.tryEmit(LinkEvent.Toast(if (on) "The laptop's sound plays here, turned on from the dashboard" else "The laptop's sound was turned off from the dashboard"))
             }
-            "focus" -> _events.tryEmit(LinkEvent.TextFocus(m.optBoolean("text")))
-            "clip" -> _events.tryEmit(LinkEvent.Clipboard(m.optString("text")))
+            "focus" -> _events.tryEmit(LinkEvent.TextFocus(m.optBoolean("text"), m.optBoolean("terminal")))
+            "clip" -> {
+                val text = m.optString("text")
+                val sync = m.optBoolean("sync")
+                // kept, so the phone's copy of it isn't sent straight back
+                if (sync) clipSynced = text
+                _events.tryEmit(LinkEvent.Clipboard(text, sync))
+            }
             "toast" -> _events.tryEmit(LinkEvent.Toast(m.optString("msg")))
             "pong" -> {
                 val ms = (System.nanoTime() - pingSentAt) / 1_000_000
                 _state.update { it.copy(pingMs = ms.toInt()) }
+                localPointer.rttMs = ms.toInt()
             }
         }
     }
@@ -550,13 +585,19 @@ class LinkSession @Inject constructor(
         send("""{"t":"ping"${if (rtt != null) ""","rtt":$rtt""" else ""},"net":"${network()}"}""")
     }
 
-    fun move(dx: Float, dy: Float) = send("""{"t":"m","dx":${round2(dx)},"dy":${round2(dy)}}""")
+    fun move(dx: Float, dy: Float) {
+        send("""{"t":"m","dx":${round2(dx)},"dy":${round2(dy)}}""")
+        if (drawsPointer) localPointer.sent(dx, dy, android.os.SystemClock.uptimeMillis())
+    }
     fun scroll(dx: Float, dy: Float) = send("""{"t":"scroll","dx":${round2(dx)},"dy":${round2(dy)}}""")
     fun click(button: String = "left", count: Int = 1) = send("""{"t":"click","btn":"$button","n":$count}""")
     fun button(button: String, down: Boolean) = send("""{"t":"b","btn":"$button","down":$down}""")
 
     /** Puts the pointer at a point of the monitor shown (0..1), and clicks there if asked. */
-    fun pointAt(x: Float, y: Float, click: Boolean) = send("""{"t":"abs","x":${round4(x)},"y":${round4(y)},"click":$click}""")
+    fun pointAt(x: Float, y: Float, click: Boolean) {
+        send("""{"t":"abs","x":${round4(x)},"y":${round4(y)},"click":$click}""")
+        if (drawsPointer) localPointer.jump(x, y)
+    }
 
     fun key(name: String, mods: Collection<String> = emptyList()) =
         sendJson(JSONObject().put("t", "key").put("key", name).put("mods", JSONArray(mods)))
@@ -564,7 +605,22 @@ class LinkSession @Inject constructor(
     fun text(value: String) = sendJson(JSONObject().put("t", "text").put("s", value))
     fun media(command: String) = send("""{"t":"media","cmd":"$command"}""")
     fun lock() = send("""{"t":"sys","cmd":"lock"}""")
-    fun copyToLaptop(text: String) = sendJson(JSONObject().put("t", "clip_set").put("text", text))
+    fun copyToLaptop(text: String, quiet: Boolean = false) {
+        if (quiet) clipSynced = text
+        sendJson(JSONObject().put("t", "clip_set").put("text", text).put("quiet", quiet))
+    }
+
+    /** The last text either clipboard had while the two are kept in step: the one not to send again. */
+    @Volatile var clipSynced: String? = null
+
+    /** Whether the two clipboards are kept in step: asked for, and this tandem can. */
+    val syncsClipboard: Boolean get() = prefs.config.value.clipSync && CLIP_SYNC in _state.value.caps
+
+    /** Keeps the two clipboards in step, or stops. */
+    fun setClipSync(on: Boolean) {
+        prefs.update { it.copy(clipSync = on) }
+        if (CLIP_SYNC in _state.value.caps) send("""{"t":"clip_sync","on":$on}""")
+    }
     fun askClipboard() = send("""{"t":"clip_get"}""")
     fun openOnLaptop(url: String) = sendJson(JSONObject().put("t", "open").put("url", url))
 
@@ -724,5 +780,9 @@ class LinkSession @Inject constructor(
         const val RECONNECT_GRACE_MS = 20_000L
         const val CATALOG = "catalog"
         const val POINTER = "pointer"
+        /** This tandem can leave the pointer out of the picture, for the phone to draw its own. */
+        const val LOCAL_CURSOR = "localcursor"
+        /** This tandem sends its clipboard as it changes, for the phone to keep the two in step. */
+        const val CLIP_SYNC = "clipsync"
     }
 }

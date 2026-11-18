@@ -540,7 +540,9 @@ internal class TileFx {
 internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null) {
     val glyph = s.shownGlyph
     val lit = s.toggle != null && s.on
-    val tone = glyphTone(glyph)
+    // the tile wears its icon's colour: the glyph's own, else the main colour of its app's or site's icon
+    val tone = rememberTileTone(s, store, icons)
+    val fill = lerp(Background, tone, 0.13f)
     val actions = s.steps.count { it.kind != LinkShortcutKind.WAIT }
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -553,7 +555,7 @@ internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int,
                 }
                 .clip(TileShape)
                 .drawBehind {
-                    drawRect(ShortcutFill)
+                    drawRect(fill)
                     if (lit) drawRect(tone.copy(alpha = 0.24f))
                     if (fx.flash.value > 0f) drawRect(tone.copy(alpha = 0.34f * fx.flash.value))
                 }
@@ -564,7 +566,7 @@ internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int,
             Box(Modifier.height(26.dp).graphicsLayer { scaleX = fx.hop.value; scaleY = fx.hop.value }, contentAlignment = Alignment.Center) {
                 val lead = s.lead
                 when {
-                    glyph != null -> GlyphFace(glyph, store, icons, badgeApp = s.appId)
+                    glyph != null -> GlyphFace(glyph, store, icons, badgeApp = s.appId, tint = tone)
                     lead == null || (lead.kind == LinkShortcutKind.KEYS && lead.key.isBlank()) ->
                         Icon(AppIcons.Keyboard, null, tint = LinkShortcutTone, modifier = Modifier.size(22.dp))
                     else -> StepFace(lead, store, icons, picture = picture)
@@ -579,13 +581,73 @@ internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int,
         }
         if (actions > 1) {
             Box(
-                Modifier.align(Alignment.TopEnd).padding(5.dp).size(15.dp).clip(CircleShape).background(LinkShortcutTone.copy(alpha = 0.22f)),
+                Modifier.align(Alignment.TopEnd).padding(5.dp).size(15.dp).clip(CircleShape).background(tone.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("$actions", color = LinkShortcutTone, fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = 9.sp)
+                Text("$actions", color = tone, fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = 9.sp)
             }
         }
     }
+}
+
+/**
+ * The colour a tile wears: its glyph's own, else the main colour of its first step's app or site
+ * icon (read off the main thread, once per picture), else the shortcuts' yellow.
+ */
+@Composable
+internal fun rememberTileTone(s: LinkShortcut, store: LinkShortcutStore, icons: Int): Color {
+    s.shownGlyph?.color?.let { return Color(it.toInt()) }
+    val lead = s.lead
+    val pictured = lead?.takeIf { it.kind == LinkShortcutKind.APP || it.kind == LinkShortcutKind.SITE }
+    val tone by produceState<Color?>(null, pictured?.kind, pictured?.app, pictured?.url, icons) {
+        value = pictured?.let { st -> withContext(Dispatchers.IO) { store.iconFile(st)?.let(::pictureTone) } }
+    }
+    return tone ?: LinkShortcutTone
+}
+
+private val toneCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+/**
+ * The main colour of a picture, made bright enough for a dark tile: the most common hue among
+ * its coloured pixels (grey, black and white left out), averaged within that hue. Null for a
+ * picture with hardly any colour (a black-and-white logo), which keeps the shortcuts' yellow.
+ */
+internal fun pictureTone(file: java.io.File): Color? {
+    val key = file.path + "@" + file.lastModified()
+    toneCache[key]?.let { return if (it == 0) null else Color(it) }
+    val bitmap = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 32) sample *= 2
+        BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull() ?: return null
+    val hsv = FloatArray(3)
+    val buckets = Array(24) { FloatArray(4) }   // weight, r, g, b
+    var colored = 0
+    var seen = 0
+    for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
+        val c = bitmap.getPixel(x, y)
+        if (android.graphics.Color.alpha(c) < 180) continue
+        seen++
+        android.graphics.Color.colorToHSV(c, hsv)
+        if (hsv[1] < 0.28f || hsv[2] < 0.25f) continue
+        colored++
+        val w = hsv[1] * hsv[2]
+        val b = buckets[((hsv[0] / 15f).toInt()).coerceIn(0, 23)]
+        b[0] += w; b[1] += android.graphics.Color.red(c) * w; b[2] += android.graphics.Color.green(c) * w; b[3] += android.graphics.Color.blue(c) * w
+    }
+    val best = buckets.maxBy { it[0] }
+    if (seen == 0 || colored < seen / 12 || best[0] <= 0f) {
+        toneCache[key] = 0
+        return null
+    }
+    android.graphics.Color.RGBToHSV((best[1] / best[0]).toInt(), (best[2] / best[0]).toInt(), (best[3] / best[0]).toInt(), hsv)
+    hsv[1] = hsv[1].coerceIn(0.45f, 0.85f)
+    hsv[2] = hsv[2].coerceAtLeast(0.82f)
+    val out = android.graphics.Color.HSVToColor(hsv)
+    toneCache[key] = out
+    return Color(out)
 }
 
 /** A glyph's colour, or the shortcuts' yellow for one that has none. */
@@ -597,7 +659,7 @@ internal fun glyphTone(g: LinkGlyph?): Color = g?.color?.let { Color(it.toInt())
  * headphones with Discord's logo by them).
  */
 @Composable
-internal fun GlyphFace(glyph: LinkGlyph, store: LinkShortcutStore, icons: Int, size: Dp = 26.dp, badgeApp: String? = null) {
+internal fun GlyphFace(glyph: LinkGlyph, store: LinkShortcutStore, icons: Int, size: Dp = 26.dp, badgeApp: String? = null, tint: Color? = null) {
     val context = LocalContext.current
     val file = remember(glyph.id, icons) { store.glyphFile(glyph.id) }
     val request = remember(glyph.id, file) {
@@ -610,7 +672,7 @@ internal fun GlyphFace(glyph: LinkGlyph, store: LinkShortcutStore, icons: Int, s
     Box(Modifier.size(size + if (badgeApp != null) 4.dp else 0.dp)) {
         AsyncImage(
             model = request, contentDescription = null,
-            colorFilter = ColorFilter.tint(glyphTone(glyph)),
+            colorFilter = ColorFilter.tint(glyph.color?.let { Color(it.toInt()) } ?: tint ?: glyphTone(glyph)),
             modifier = Modifier.size(size).align(Alignment.Center),
         )
         if (badgeApp != null) {

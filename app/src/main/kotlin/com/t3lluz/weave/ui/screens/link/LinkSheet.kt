@@ -1,5 +1,6 @@
 package com.t3lluz.weave.ui.screens.link
 
+import com.t3lluz.weave.data.link.LinkSession
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -166,8 +167,16 @@ internal fun LinkSheet(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                ToggleRow("Draw the pointer here", "It moves the moment your finger does, ahead of the picture", config.localPointer, LinkHandsTone) {
+                    viewModel.change { it.copy(localPointer = !it.localPointer) }
+                    // the laptop leaves its own pointer out of the picture, or puts it back, from the next connection
+                    session.reconnect()
+                }
                 ToggleRow("Scroll like a phone", "The page moves with your fingers", config.naturalScroll, LinkHandsTone) {
                     viewModel.change { it.copy(naturalScroll = !it.naturalScroll) }
+                }
+                ToggleRow("Autocorrect", "The phone's keyboard corrects and suggests words, never in a terminal", config.autocorrect, LinkHandsTone) {
+                    viewModel.change { it.copy(autocorrect = !it.autocorrect) }
                 }
                 ToggleRow("Keyboard rises by itself", "When a click lands where you type", config.autoKeyboard, LinkHandsTone) {
                     viewModel.change { it.copy(autoKeyboard = !it.autoKeyboard) }
@@ -179,6 +188,11 @@ internal fun LinkSheet(
             }
 
             HealthSection(tone = TextSecondary) {
+                if (LinkSession.CLIP_SYNC in state.caps) {
+                    ToggleRow("Keep the clipboards in sync", "Copy on either one, paste on the other", config.clipSync, TextSecondary) {
+                        actions.clipSync(!config.clipSync)
+                    }
+                }
                 ActionRow(AppIcons.ClipboardPaste, "Copy what's copied on $laptopName", TextSecondary) { onDismiss(); actions.fetchClipboard() }
                 ActionRow(AppIcons.ClipboardCopy, "Send what's copied here to $laptopName", TextSecondary) { onDismiss(); actions.sendClipboard() }
                 ActionRow(AppIcons.Lock, "Lock $laptopName", TextSecondary) { onDismiss(); session.lock() }

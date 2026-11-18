@@ -246,25 +246,65 @@ class LinkKeyView(context: Context) : View(context) {
     var onText: (String) -> Unit = {}
     var onKey: (String) -> Unit = {}
 
+    /**
+     * The keyboard corrects and suggests as it does anywhere: it edits a copy of what was typed
+     * since the last reset, and only the difference goes to the laptop ("teh" corrected to "the"
+     * is two backspaces and "he"). Off, each key goes straight over, as into a password field.
+     */
+    var autocorrect = false
+        set(on) {
+            if (field == on) return
+            field = on
+            restart()
+        }
+
+    /** What the laptop has been sent since the last reset, as the keyboard's copy had it. */
+    private var sent = ""
+    private var connection: BaseInputConnection? = null
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
     }
 
+    private val imm get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+
     fun showKeyboard() {
         requestFocus()
-        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.showSoftInput(this, 0)
+        imm?.showSoftInput(this, 0)
     }
 
     fun hideKeyboard() {
-        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(windowToken, 0)
+        imm?.hideSoftInputFromWindow(windowToken, 0)
+    }
+
+    /**
+     * Forget what was typed: a click on the laptop, Enter, or arrow keys moved its cursor, and
+     * the keyboard's copy no longer matches what is there.
+     */
+    fun reset() {
+        if (sent.isEmpty() && connection?.editable.isNullOrEmpty()) return
+        restart()
+    }
+
+    private fun restart() {
+        sent = ""
+        connection?.editable?.clear()
+        imm?.restartInput(this)
     }
 
     override fun onCheckIsTextEditor() = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        if (autocorrect) {
+            outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            outAttrs.initialSelStart = 0
+            outAttrs.initialSelEnd = 0
+            sent = ""
+            return MirrorConnection().also { connection = it }
+        }
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         return object : BaseInputConnection(this, true) {
             override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
                 super.commitText(text, newCursorPosition)
@@ -298,6 +338,72 @@ class LinkKeyView(context: Context) : View(context) {
                 if (content.isNotEmpty()) onText(content.toString())
                 content.clear()
             }
+        }.also { connection = it }
+    }
+
+    /**
+     * The keyboard's copy of what was typed. After each edit the laptop gets what changed: back
+     * to where the old and new text part ways, then the rest of the new.
+     */
+    private inner class MirrorConnection : BaseInputConnection(this, true) {
+        override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean =
+            super.commitText(text, newCursorPosition).also { sync() }
+
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean =
+            super.setComposingText(text, newCursorPosition).also { sync() }
+
+        override fun setComposingRegion(start: Int, end: Int): Boolean =
+            super.setComposingRegion(start, end).also { sync() }
+
+        override fun finishComposingText(): Boolean = super.finishComposingText().also { sync() }
+
+        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+            // nothing of ours to take back: what is before the cursor on the laptop goes
+            if (editable.isNullOrEmpty()) {
+                repeat(beforeLength.coerceIn(1, 64)) { onKey("backspace") }
+                return true
+            }
+            return super.deleteSurroundingText(beforeLength, afterLength).also { sync() }
+        }
+
+        override fun performEditorAction(actionCode: Int): Boolean {
+            onKey("enter")
+            restart()
+            return true
+        }
+
+        override fun sendKeyEvent(event: KeyEvent): Boolean {
+            if (event.action != KeyEvent.ACTION_DOWN) return true
+            val name = keyName(event.keyCode) ?: return super.sendKeyEvent(event)
+            val content = editable
+            if (name == "backspace" && !content.isNullOrEmpty()) {
+                content.delete(content.length - 1, content.length)
+                sync()
+                return true
+            }
+            onKey(name)
+            // a line ended or the cursor moved: the copy no longer matches the laptop
+            if (name != "backspace") restart()
+            return true
+        }
+
+        private fun sync() {
+            val now = editable?.toString().orEmpty()
+            if (now == sent) return
+            // a line break typed into the copy is Enter on the laptop, and a fresh copy after it
+            val cut = now.indexOf('\n')
+            val upTo = if (cut >= 0) now.substring(0, cut) else now
+            val (back, type) = mirrorEdit(sent, upTo)
+            repeat(back) { onKey("backspace") }
+            if (type.isNotEmpty()) onText(type)
+            sent = upTo
+            if (cut >= 0) {
+                onKey("enter")
+                restart()
+            } else if (sent.length > MIRROR_MAX && sent.endsWith(' ')) {
+                // a long run: start a fresh copy at a word's end, where nothing is left to correct
+                restart()
+            }
         }
     }
 
@@ -330,6 +436,20 @@ class LinkKeyView(context: Context) : View(context) {
         else -> null
     }
 }
+
+/**
+ * What turns [was] into [now] on the laptop, typing at the end of the line: backspaces back to
+ * where the two part ways, then the rest of [now]. "teh " corrected to "the " is 3 and "he ".
+ */
+internal fun mirrorEdit(was: String, now: String): Pair<Int, String> {
+    var same = 0
+    val most = minOf(was.length, now.length)
+    while (same < most && was[same] == now[same]) same++
+    return (was.length - same) to now.substring(same)
+}
+
+/** How long the keyboard's copy grows before it starts afresh at the next word's end. */
+private const val MIRROR_MAX = 400
 
 /** The key a single typed character stands for, so ctrl + "c" is the chord and not a letter. */
 fun chordKey(text: String): String? {

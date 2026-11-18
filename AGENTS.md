@@ -24,6 +24,10 @@ A shortcut (`LinkShortcut`, data/link/LinkShortcuts.kt) is a name and up to 8 st
 
 The AI screens wear Weave's look, not DailyDash's settings cards: rooms (`HealthSection`, `RoomTitle`), the display face, `PillButton` and `PillField`. `AiTone` (the shortcuts' yellow) is the AI's colour; the account badge is the trackpad's green, a key the screen's sky. The model sheet (`ModelSheet.kt`) follows the dashboard's Hermes model picker on a phone: search, each model line with its older versions folded under the newest, and a room at the foot with the model, the effort cells and Done.
 
+## Pointer, keyboard and clipboard
+
+The phone draws the pointer itself (`LocalPointer`, drawn by `LinkPreview`): the laptop's last report ("cur", 30 a second) plus the moves sent since, with the laptop's own acceleration learnt as `gain`. It asks tandem for pictures without the pointer (`"cursor": "local"` in the hello, tandem's `localcursor` cap) and falls back to the laptop's pointer in the picture with a tandem that can't. Autocorrect (More → Trackpad) gives the phone's keyboard a copy of what was typed and sends the laptop the difference (`mirrorEdit`); it resets on every click, on Enter and on arrow keys, and stays off in terminals (tandem's focus report says `terminal`). The keyboard rises only when a click moves from outside a text field into one. Clipboard sync (`clipsync`) sends the laptop's copies as they change; the phone sends its own while the remote is in front (Android lets only the app in front read the clipboard), quietly, and neither side sends back what came from the other.
+
 ## Build and look
 
 ```bash
