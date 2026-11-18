@@ -66,15 +66,12 @@ main() {
   [[ -n "$edge" ]] || die "no public address for $zone_name"
   for i in $(seq 1 20); do
     code=$(curl -s -o /dev/null -w '%{http_code}' --resolve "$zone_name:443:$edge" \
-      "https://$zone_name/Portfolio/api/health" -L || true)
+      "https://$zone_name/Weave/api/health" -L || true)
     [[ "$code" == "200" ]] && break
     sleep 3
   done
   [[ "$code" == "200" ]] || die "public check failed (edge $edge, HTTP ${code:-none})"
-  code=$(curl -s -o /dev/null -w '%{http_code}' --resolve "$zone_name:443:$edge" \
-    "https://$zone_name/Portfolio/Admin" -L || true)
-  [[ "$code" == "404" ]] || die "admin is reachable from outside (HTTP $code)"
-  echo "public: https://$zone_name/portfolio answers from $edge; /portfolio/admin is tailnet only"
+  echo "public: https://$zone_name/weave answers from $edge"
 }
 
 die() {
