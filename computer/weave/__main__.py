@@ -30,13 +30,15 @@ def pair() -> int:
     if not r.get("ok"):
         print(r.get("msg"))
         return 1
+    if sys.platform == "win32":
+        os.system("")   # turns on the console's colour codes, which the code is drawn with
     print(pairing.qr_text(r["link"]))
     print()
     print("Scan this with Weave on your phone (Scan a code), or with its camera.")
     where = "your network or your tailnet" if r.get("lan") else "your tailnet"
     print(f"The phone has to be on {where}. The code works once, for {int(r['ttl'] // 60)} minutes.")
     print()
-    print(f"No camera? In Weave, tap Connect by address and type:  {r['addrs'][0]}")
+    print(f"No camera? In Weave, tap By address and type:  {r['addrs'][0]}")
     print("Then answer the question that shows up here, or run: weave allow")
     print()
     try:
@@ -70,12 +72,13 @@ def status() -> int:
         return 1
     p = r["phone"]
     print(f"weave {r['version']} on {r['host']}, port {r['port']}")
-    print(f"phone      {p['model'] + ' (' + p['serial'] + ')' if p['serial'] else 'not reachable over adb'}")
-    print(f"  window   {'open' if p['mirror'] else 'closed'}")
-    audio = "off"
-    if p["audio"]:
-        audio = f"on ({p['audio_source']})" if p["audio_running"] else "on, waiting for the phone"
-    print(f"  audio    {audio}")
+    if sys.platform != "win32":   # the phone on this computer (its window, its sound) is Linux's for now
+        print(f"phone      {p['model'] + ' (' + p['serial'] + ')' if p['serial'] else 'not reachable over adb'}")
+        print(f"  window   {'open' if p['mirror'] else 'closed'}")
+        audio = "off"
+        if p["audio"]:
+            audio = f"on ({p['audio_source']})" if p["audio_running"] else "on, waiting for the phone"
+        print(f"  audio    {audio}")
     if r["sessions"]:
         for s in r["sessions"]:
             print(f"remote     {s['name']} from {s['peer']}" + (f", watching {s['monitor']}" if s["video"] else ""))
@@ -85,13 +88,10 @@ def status() -> int:
     dash = r.get("dashboard") or {}
     if dash.get("url"):
         print(f"dashboard  {dash['url']} ({'announced' if dash.get('online') else 'not answering'})")
-    else:
-        print('dashboard  none set ("dashboard" in ~/.config/weave/config.json)')
     if r["pending"]:
         print(f"waiting    {', '.join(r['pending'])}  (weave allow)")
-    for name, path in r["tools"].items():
-        if not path:
-            print(f"missing    {name}")
+    for name in r.get("missing", []):
+        print(f"missing    {name}")
     return 0
 
 

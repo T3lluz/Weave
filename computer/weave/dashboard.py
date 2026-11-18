@@ -80,15 +80,9 @@ class Dashboard:
         self._changed.set()
 
     async def _addresses(self) -> list[str]:
-        out = []
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "tailscale", "ip", "-4", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-            got, _ = await asyncio.wait_for(proc.communicate(), 4)
-            out = [line.strip() for line in got.decode().splitlines() if line.strip()]
-        except (OSError, asyncio.TimeoutError):
-            pass
-        return [*out, socket.gethostname()]
+        """This computer's tailnet addresses, then its name."""
+        got = await run("tailscale", "ip", "-4", timeout=4)
+        return [*[line.strip() for line in got.splitlines() if line.strip()], socket.gethostname()]
 
     async def run(self):
         if not self.url:

@@ -10,9 +10,8 @@ from ..proc import run
 from . import api, screen
 
 PLATFORM = "windows"
-# what this computer can do beyond the first version, for the phone to offer; "sound" is missing:
-# the computer's own sound isn't sent from Windows yet
-CAPS = ["catalog", "launch", "pointer", "warp", "localcursor", "clipsync", "moveseq"]
+# what this computer can do beyond the first version, for the phone to offer
+CAPS = ["catalog", "launch", "pointer", "warp", "sound", "localcursor", "clipsync", "moveseq"]
 NEEDS = ["ffmpeg"]
 
 CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
@@ -86,11 +85,15 @@ def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):
 
 
 def _ask(title: str, body: str, timeout: float) -> bool | None:
-    flags = 0x4 | 0x20 | 0x10000 | 0x40000   # yes/no, a question mark, in front, on top
+    # yes/no, a question mark, and over every other window (system modal is what keeps a box from
+    # a background program on top: without it the question opens behind whatever is in front)
+    flags = 0x4 | 0x20 | 0x1000 | 0x10000 | 0x40000
     try:
-        answer = api.user32.MessageBoxTimeoutW(None, body + "\n\nYes lets it in. No turns it away.", "Weave: " + title, flags, 0, int(timeout * 1000))
+        # the sentence goes in the box, not its title: Windows cuts a long title off
+        text = f"{title}.\n\n{body}\n\nYes lets it in. No turns it away."
+        answer = api.user32.MessageBoxTimeoutW(None, text, "Weave", flags, 0, int(timeout * 1000))
     except AttributeError:
-        answer = api.user32.MessageBoxW(None, body, "Weave: " + title, flags)
+        answer = api.user32.MessageBoxW(None, f"{title}.\n\n{body}", "Weave", flags)
     return True if answer == 6 else False if answer == 7 else None
 
 
@@ -104,31 +107,63 @@ async def lock():
 
 
 async def text_focused() -> bool:
-    return screen.caret_showing()
+    """Whether what has the focus takes typing: Windows' accessibility layer says (focus.py);
+    when it won't, a blinking caret is the next best sign."""
+    from . import focus
+    said = await focus.typable()
+    return screen.caret_showing() if said is None else said
 
 
 _wake: tuple[float, dict | None] | None = None
+_wake_task: asyncio.Task | None = None
 
 
-async def wake_info() -> dict | None:
-    """The network card the PC reaches the world through: its MAC and its network's broadcast
-    address, for a magic packet that wakes it. Asked of Windows once in ten minutes."""
-    global _wake
-    if _wake and time.monotonic() - _wake[0] < 600:
-        return _wake[1]
+async def _read_wake() -> dict | None:
     out = await run(
         "powershell.exe", "-NoProfile", "-Command",
         "$c = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1; "
         "if ($c) { $c.NetAdapter.MacAddress; $c.IPv4Address[0].IPAddress; $c.IPv4Address[0].PrefixLength; $c.NetAdapter.PhysicalMediaType }",
-        timeout=12)
-    info = None
+        timeout=30)
     lines = [line.strip() for line in out.splitlines() if line.strip()]
-    if len(lines) >= 3:
-        try:
-            net = ipaddress.ip_network(f"{lines[1]}/{int(lines[2])}", strict=False)
-            info = {"mac": lines[0].replace("-", ":").lower(), "brd": str(net.broadcast_address),
-                    "wifi": "802.11" in (lines[3] if len(lines) > 3 else "")}
-        except ValueError:
-            info = None
-    _wake = (time.monotonic(), info)
-    return info
+    if len(lines) < 3:
+        return None
+    try:
+        net = ipaddress.ip_network(f"{lines[1]}/{int(lines[2])}", strict=False)
+    except ValueError:
+        return None
+    return {"mac": lines[0].replace("-", ":").lower(), "brd": str(net.broadcast_address),
+            "wifi": "802.11" in (lines[3] if len(lines) > 3 else "")}
+
+
+async def _refresh_wake():
+    global _wake
+    _wake = (time.monotonic(), await _read_wake())
+
+
+async def wake_info() -> dict | None:
+    """The network card the PC reaches the world through: its MAC and its network's broadcast
+    address, for a magic packet that wakes it. Never waited for: asking Windows takes PowerShell
+    seconds, and a phone saying hello shouldn't sit through them. What was read last is given,
+    and it is read again in the background once it is ten minutes old."""
+    global _wake_task
+    stale = _wake is None or time.monotonic() - _wake[0] > 600
+    if stale and (_wake_task is None or _wake_task.done()):
+        _wake_task = asyncio.create_task(_refresh_wake())
+    return _wake[1] if _wake else None
+
+
+async def prewarm():
+    """What takes seconds the first time, done once at the start instead of on a phone's first
+    hello: the network card, which encoder works, and the sound helper's build."""
+    from . import capture, focus, sound
+    await wake_info()
+    ffmpeg = capture.ffmpeg_path()
+    if ffmpeg:
+        await capture.encoder(ffmpeg)
+    await sound.helper()
+    await focus.describe()
+
+
+def local_addresses() -> list[str] | None:
+    """Windows names no easy way to tell a real card from a virtual one: pairing.py's own guess stands."""
+    return None

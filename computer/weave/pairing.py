@@ -52,20 +52,25 @@ class Codes:
             del self.out[code]
 
 
-def addresses(tailnet: list[str] | None = None) -> list[str]:
-    """Where a phone can reach this computer, best first: its addresses on the local network,
-    then its tailnet ones, then its name (which a tailnet resolves)."""
+def addresses(tailnet: list[str] | None = None, cards: list[str] | None = None) -> list[str]:
+    """Where a phone can reach this computer, best first: its addresses on the local network (the
+    one the default route leaves from leading), then its tailnet ones, then its name (which a
+    tailnet resolves). [cards] are the addresses of its real network cards, when the system can
+    tell; without them, whatever its own name resolves to."""
     found: list[str] = []
-    try:
-        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
-        found += [i[4][0] for i in infos]
-    except OSError:
-        pass
-    # the address the default route leaves from, which the lookup above can miss
+    if cards is None:
+        try:
+            found += [i[4][0] for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+        except OSError:
+            pass
+    else:
+        found += cards
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("192.0.2.1", 9))   # nothing is sent: it only picks the route
-            found.insert(0, s.getsockname()[0])
+            first = s.getsockname()[0]
+        if cards is None or first in cards:
+            found.insert(0, first)
     except OSError:
         pass
     local = []

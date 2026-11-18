@@ -1,12 +1,14 @@
-"""The picture on Windows: ffmpeg grabs one monitor's part of the desktop (gdigrab), encodes
-H.264 with the graphics card when it can and the processor when it can't, and writes FLV to a
-pipe. The reading of that pipe is capture.py's, the same as on Linux."""
+"""The picture and the sound on Windows: ffmpeg grabs one monitor's part of the desktop (gdigrab),
+encodes H.264 with the graphics card when it can and the processor when it can't, takes what
+the speakers play from sound.py's helper, and writes FLV to a pipe. The reading of that pipe is
+capture.py's, the same as on Linux."""
 
 import asyncio
 import shutil
 
 from ..capture import Capture as _Recorder
 from ..config import DATA_DIR
+from . import sound
 
 NO_WINDOW = 0x08000000   # ffmpeg is a console program: without this each run flashes a black box
 
@@ -50,17 +52,20 @@ def bitrate(w: int, h: int, fps: int, quality: str) -> int:
     return int(min(max(w * h * fps * BITS.get(quality, BITS["high"]) / 1000, 1500), 40_000))
 
 
-def video_args(ffmpeg: str, mon: dict, limit: str, quality: str, fps: int, cursor: bool, encoder: tuple[str, list[str]]) -> list[str]:
-    """The whole ffmpeg command for one monitor."""
+def video_args(ffmpeg: str, mon: dict, limit: str, quality: str, fps: int, cursor: bool, encoder: tuple[str, list[str]],
+               audio_kbps: int = 0) -> list[str]:
+    """The whole ffmpeg command for one monitor; with [audio_kbps], the sound arriving on its
+    standard input goes along as AAC."""
     w, h = target_size(mon["pw"], mon["ph"], limit)
     kbps = bitrate(w, h, fps, quality)
     name, tuning = encoder
     scale = [] if (w, h) == (mon["pw"], mon["ph"]) else ["-vf", f"scale={w}:{h}:flags=fast_bilinear"]
     return [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+        ffmpeg, "-hide_banner", "-loglevel", "error", *([] if audio_kbps else ["-nostdin"]),
         "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0",
         "-f", "gdigrab", "-framerate", str(fps), "-draw_mouse", "1" if cursor else "0",
         "-offset_x", str(mon["x"]), "-offset_y", str(mon["y"]), "-video_size", f"{mon['pw']}x{mon['ph']}", "-i", "desktop",
+        *(["-thread_queue_size", "256", *sound.PCM_ARGS, "-i", "pipe:0", "-c:a", "aac", "-b:a", f"{audio_kbps}k"] if audio_kbps else []),
         *scale, "-c:v", name, *tuning, "-pix_fmt", "yuv420p", "-bf", "0", "-g", str(fps),
         "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{max(kbps // 2, 500)}k",
         "-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1", "pipe:1",
@@ -93,33 +98,66 @@ async def encoder(ffmpeg: str) -> tuple[str, list[str]] | None:
     return _encoder
 
 
-class Capture(_Recorder):
-    """One ffmpeg run of one monitor."""
+def sound_args(ffmpeg: str, audio_kbps: int) -> list[str]:
+    """The ffmpeg command for the sound alone."""
+    return [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
+        *sound.PCM_ARGS, "-i", "pipe:0", "-c:a", "aac", "-b:a", f"{audio_kbps}k",
+        "-f", "flv", "-flvflags", "no_duration_filesize", "-flush_packets", "1", "pipe:1",
+    ]
 
-    spawn = {"creationflags": NO_WINDOW}
+
+class Capture(_Recorder):
+    """One ffmpeg run of one monitor, with the PC's sound when the helper for it is there."""
 
     def __init__(self, monitor: dict, preset: str, limit: str, quality: str, fps: int, audio_kbps: int, on_video, on_audio, on_exit,
                  cursor: bool = True):
         super().__init__(monitor, preset, limit, quality, fps, audio_kbps, on_video, on_audio, on_exit, cursor)
-        self._want = (limit, quality, fps, cursor)
+        self._want = (limit, quality, fps, cursor, audio_kbps)
         self.args = []
+        self.spawn = {"creationflags": NO_WINDOW}
+        self.ear = None   # the sound helper's process
+
+    async def _listen(self) -> bool:
+        """Starts the sound helper and points ffmpeg's input at it; False when there is no helper."""
+        exe = await sound.helper()
+        if not exe:
+            return False
+        try:
+            self.ear = sound.listen(exe)
+        except OSError:
+            return False
+        self.spawn = {"creationflags": NO_WINDOW, "stdin": self.ear.stdout}
+        return True
+
+    def _fail(self, why: str):
+        self.errors.append(why)
+        self.flowing.set()
+        self.on_exit(self, 1)
 
     async def start(self):
         ffmpeg = ffmpeg_path()
         enc = await encoder(ffmpeg) if ffmpeg else None
         if not enc:
-            self.errors.append("ffmpeg is missing" if not ffmpeg else "ffmpeg has no H.264 encoder that works here")
-            self.flowing.set()
-            self.on_exit(self, 1)
-            return
-        limit, quality, fps, cursor = self._want
-        self.args = video_args(ffmpeg, self.mon, limit, quality, fps, cursor, enc)
-        await super().start()
+            return self._fail("ffmpeg is missing" if not ffmpeg else "ffmpeg has no H.264 encoder that works here")
+        limit, quality, fps, cursor, audio_kbps = self._want
+        heard = await self._listen()
+        self.args = video_args(ffmpeg, self.mon, limit, quality, fps, cursor, enc, audio_kbps if heard else 0)
+        await self._run()
+
+    async def _run(self):
+        try:
+            await super().start()
+        finally:
+            if self.ear:
+                self.ear.stdout.close()   # ffmpeg has its own end of the pipe now
 
     async def stop(self):
         self.stopped = True
         proc, self.on_exit = self.proc, lambda *_: None
         self.on_video = self.on_audio = lambda *_: None
+        if self.ear and self.ear.poll() is None:
+            self.ear.terminate()
         if not proc or proc.returncode is not None:
             return
         try:
@@ -130,14 +168,29 @@ class Capture(_Recorder):
         except ProcessLookupError:
             pass
 
+    async def _read(self):
+        try:
+            await super()._read()
+        finally:
+            # the recorder ended by itself: its ear has nobody to talk to
+            if self.ear and self.ear.poll() is None:
+                self.ear.terminate()
+
 
 class SoundCapture(Capture):
-    """The computer's sound alone. Not on Windows yet: ffmpeg can't hear what Windows plays."""
+    """The PC's sound alone, for while the phone has the picture off."""
 
     def __init__(self, audio_kbps: int, on_audio, on_exit):
         _Recorder.__init__(self, {"name": "sound", "label": "Sound"}, "sound", "", "", 1, audio_kbps, lambda *_: None, on_audio, on_exit)
+        self._kbps = audio_kbps
+        self.spawn = {"creationflags": NO_WINDOW}
+        self.ear = None
 
     async def start(self):
-        self.errors.append("the computer's sound isn't sent from Windows yet")
-        self.flowing.set()
-        self.on_exit(self, 1)
+        ffmpeg = ffmpeg_path()
+        if not ffmpeg:
+            return self._fail("ffmpeg is missing")
+        if not await self._listen():
+            return self._fail("the sound helper couldn't be built on this PC")
+        self.args = sound_args(ffmpeg, self._kbps)
+        await self._run()

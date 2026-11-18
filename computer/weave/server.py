@@ -53,6 +53,15 @@ SHARPER = {"low": "mid", "mid": "high"}
 notify = shell.notify
 
 
+def missing_tools() -> list[str]:
+    """The programs this system's side leans on that aren't installed."""
+    import shutil
+    if shell.PLATFORM == "windows":
+        from .win.capture import ffmpeg_path
+        return [] if ffmpeg_path() else ["ffmpeg"]
+    return [tool for tool in shell.NEEDS if not shutil.which(tool)]
+
+
 QUALITY_WORD = {"low": "light", "mid": "balanced", "high": "sharp"}
 
 
@@ -1106,11 +1115,12 @@ class Daemon:
                 "paired": [v["name"] for v in self.devices.data.values()],
                 "pending": [s.name for s, _ in self.pending.values()],
                 "tools": {"scrcpy": self.phone.scrcpy_path, "adb": self.phone.adb_path},
+                "missing": missing_tools(),
                 "dashboard": {"url": self.dashboard.url, "online": self.dashboard.online},
             }
         if cmd == "pair":
             code = self.codes.new()
-            addrs = pairing.addresses(await self.dashboard._addresses() if hasattr(self.dashboard, "_addresses") else None)
+            addrs = pairing.addresses(await self.dashboard._addresses(), shell.local_addresses())
             # the tailnet lookup ends with the name, which the list has already
             addrs = list(dict.fromkeys(addrs))
             return {"ok": True, "code": code, "name": self.host, "port": self.cfg["port"], "addrs": addrs,
@@ -1209,6 +1219,7 @@ class Daemon:
                 self.cfg["port"], lambda: {"name": self.host, "port": self.cfg["port"], "busy": bool(self.sessions)}, self._allowed_peer)
         asyncio.create_task(self.dashboard.run())
         asyncio.create_task(self._prewarm_catalog())
+        asyncio.create_task(shell.prewarm())
         asyncio.create_task(self._keep_cursor_apart())
         try:
             async with local_line, link:

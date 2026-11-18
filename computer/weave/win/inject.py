@@ -3,10 +3,19 @@ and keyboard come through.
 
 The pointer is placed, not nudged: each move is added to where the pointer is and sent as an
 absolute position, so Windows' own acceleration never touches it and the phone's drawn pointer
-lands exactly (a gain of 1). Text goes as the characters themselves, whatever the layout.
+lands exactly (a gain of 1).
+
+Text is typed with the keys the PC's own layout has for each character, as a keyboard would.
+What the layout can't type (an emoji, a letter of another alphabet) goes as the character
+itself. Either way it is typed at a typist's pace, not in one burst: programs that take their
+keys in the background (Windows 11's Notepad is one) read Shift late and blur a burst of
+characters together. Keys and text share one queue, so a backspace never overtakes the word
+before it.
 """
 
+import asyncio
 import ctypes
+import os
 
 from . import api
 
@@ -33,11 +42,29 @@ VK = {
     **{f"f{n}": (0x6F + n, False) for n in range(1, 13)},
 }
 MODS = ("ctrl", "shift", "alt", "super", "altgr")
+# Between two characters of typed text, in seconds. Programs that take their keys in the
+# background read Shift, and characters sent as themselves, a moment after they arrive: typed in
+# one burst, a capital loses its Shift and such characters blur into the last one. A fast typist's
+# pace is safe for all of them.
+TYPING_PACE = 0.012
 
 
 def key_vk(name: str) -> tuple[int, bool] | None:
     """A key by its name. A raw Linux code (`#30`, what a Hyprland binding presses) means nothing here."""
     return VK.get(name)
+
+
+def layout_stroke(scan: int) -> tuple[int, bool, bool] | None:
+    """What VkKeyScanEx says about a character, as (key, with shift, with AltGr); None when the
+    layout has no key for it, or only one that needs some other chord."""
+    if scan == -1:
+        return None
+    vk, state = scan & 0xFF, (scan >> 8) & 0xFF
+    if state in (0, 1):
+        return vk, bool(state & 1), False
+    if state in (6, 7):   # ctrl + alt is AltGr
+        return vk, bool(state & 1), True
+    return None
 
 
 def normalized(x: float, y: float, desk: tuple[int, int, int, int]) -> tuple[int, int]:
@@ -57,6 +84,9 @@ class Injector:
         self._wy = self._wx = 0.0                     # wheel, in 120ths of a notch
         self._held: set[tuple[str, object]] = set()
         self._presses: dict[str, int] = {}
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self.pace = float(os.environ.get("WEAVE_TYPING_PACE", TYPING_PACE))
+        self._typist = asyncio.get_running_loop().create_task(self._type())
 
     # ── out ──
 
@@ -131,9 +161,27 @@ class Injector:
             self._wx -= hx
             self._send(self._mouse(api.MOUSEEVENTF_HWHEEL, data=hx))
 
-    # ── keys and text ──
+    # ── keys and text: one queue, in the order they were typed ──
 
     def key(self, name: str, mods=(), down: bool | None = None):
+        self._queue.put_nowait(("key", name, tuple(mods), down))
+
+    def text(self, value: str):
+        if value:
+            self._queue.put_nowait(("text", value))
+
+    async def _type(self):
+        while True:
+            job = await self._queue.get()
+            try:
+                if job[0] == "key":
+                    self._key_now(*job[1:])
+                else:
+                    await self._text_now(job[1])
+            except Exception as err:   # one bad key must not end the typing
+                print(f"weave: typing: {err!r}")
+
+    def _key_now(self, name: str, mods, down):
         spec = key_vk(name)
         if spec is None:
             return
@@ -146,16 +194,37 @@ class Injector:
         self._send(*[self._key(v, False, e) for v, e in held], self._key(vk, False, extended), self._key(vk, True, extended),
                    *[self._key(v, True, e) for v, e in reversed(held)])
 
-    def text(self, value: str):
+    def _layout(self):
+        """The keyboard layout of whatever has the focus: that is the one its keys are read by."""
+        thread = api.user32.GetWindowThreadProcessId(api.user32.GetForegroundWindow(), None)
+        return api.user32.GetKeyboardLayout(thread)
+
+    async def _text_now(self, value: str):
+        layout = self._layout()
         for ch in value:
             if ch == "\n":
                 self._send(self._key(0x0D, False), self._key(0x0D, True))
+                await asyncio.sleep(self.pace)
                 continue
-            # characters past the first 65536 go as the two halves Windows itself would send
-            data = ch.encode("utf-16-le")
-            for i in range(0, len(data), 2):
-                unit = int.from_bytes(data[i:i + 2], "little")
-                self._send(self._key(0, False, scan=unit, unicode=True), self._key(0, True, scan=unit, unicode=True))
+            stroke = layout_stroke(api.user32.VkKeyScanExW(ch, layout)) if len(ch.encode("utf-16-le")) == 2 else None
+            if stroke:
+                vk, shift, altgr = stroke
+                mods = [v for v, on in ((0xA0, shift), (0xA2, altgr), (0xA4, altgr)) if on]
+                if mods:
+                    # held a moment before the key and a moment after, as a hand holds it: a
+                    # program that looks at Shift late must still find it down
+                    self._send(*[self._key(m, False) for m in mods])
+                    await asyncio.sleep(self.pace / 2)
+                self._send(self._key(vk, False), self._key(vk, True))
+                if mods:
+                    await asyncio.sleep(self.pace / 2)
+                    self._send(*[self._key(m, True) for m in reversed(mods)])
+            else:
+                # no key for it: the character itself (both halves of one past the first 65536 together)
+                data = ch.encode("utf-16-le")
+                units = [int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data), 2)]
+                self._send(*[self._key(0, False, scan=u, unicode=True) for u in units], *[self._key(0, True, scan=u, unicode=True) for u in units])
+            await asyncio.sleep(self.pace)
 
     def release_all(self):
         """Lets go of whatever a dropped connection left held."""
@@ -169,4 +238,5 @@ class Injector:
         self._presses = {}
 
     def close(self):
+        self._typist.cancel()
         self.release_all()

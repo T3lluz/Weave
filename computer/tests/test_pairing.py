@@ -49,6 +49,13 @@ class Invitation(unittest.TestCase):
                 mock.patch.object(pairing.socket, "socket", side_effect=OSError):
             self.assertEqual(pairing.addresses(["100.64.0.7", "box"]), ["192.168.1.5", "100.64.0.7", "box"])
 
+    def test_only_real_cards_count_when_the_system_names_them(self):
+        # a bridge for containers has a private address too, and no phone can reach it
+        with mock.patch.object(pairing.socket, "getaddrinfo", return_value=[(0, 0, 0, "", ("172.17.0.1", 0))]), \
+                mock.patch.object(pairing.socket, "gethostname", return_value="box"), \
+                mock.patch.object(pairing.socket, "socket", side_effect=OSError):
+            self.assertEqual(pairing.addresses(["100.64.0.7"], cards=["10.0.0.4"]), ["10.0.0.4", "100.64.0.7", "box"])
+
     def test_the_code_on_screen_has_a_quiet_border_and_square_modules(self):
         text = pairing.qr_text(pairing.invite("box", ["192.168.1.5"], 47600, "abcDEF123456"))
         lines = [line.replace("\x1b[30;107m", "").replace("\x1b[0m", "") for line in text.splitlines()]

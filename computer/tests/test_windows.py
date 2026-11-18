@@ -1,8 +1,6 @@
 """The parts of the Windows side that are plain arithmetic and text: they run anywhere."""
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from weave.win import capture, catalog, inject, screen
 
@@ -28,6 +26,17 @@ class Picture(unittest.TestCase):
         self.assertIn("-c:v libx264 -preset ultrafast -tune zerolatency", joined)
         self.assertTrue(joined.endswith("-f flv -flvflags no_duration_filesize -flush_packets 1 pipe:1"))
         self.assertIn("-draw_mouse 1", " ".join(capture.video_args("ffmpeg", mon, "1280x800", "high", 60, True, capture.ENCODERS[-1])))
+
+    def test_with_sound_the_command_reads_it_from_its_input_and_sends_it_as_aac(self):
+        mon = {"x": 0, "y": 0, "pw": 1280, "ph": 800}
+        quiet = capture.video_args("ffmpeg", mon, "1920x1200", "high", 60, False, capture.ENCODERS[-1])
+        loud = capture.video_args("ffmpeg", mon, "1920x1200", "high", 60, False, capture.ENCODERS[-1], audio_kbps=160)
+        self.assertIn("-nostdin", quiet)
+        self.assertNotIn("-nostdin", loud, "its input is the sound")
+        self.assertIn("-f s16le -ar 48000 -ac 2 -i pipe:0 -c:a aac -b:a 160k", " ".join(loud))
+        self.assertLess(loud.index("desktop"), loud.index("pipe:0"), "the picture is the first input")
+        alone = " ".join(capture.sound_args("ffmpeg", 160))
+        self.assertIn("-f s16le -ar 48000 -ac 2 -i pipe:0 -c:a aac -b:a 160k -f flv", alone)
 
     def test_bitrate_follows_size_pace_and_quality_within_bounds(self):
         self.assertGreater(capture.bitrate(1920, 1080, 60, "very_high"), capture.bitrate(1920, 1080, 60, "medium"))
@@ -59,6 +68,14 @@ class Keys(unittest.TestCase):
         self.assertEqual(inject.key_vk("a"), (0x41, False))
         self.assertEqual(inject.key_vk("left"), (0x25, True))
 
+    def test_a_character_is_typed_with_the_layouts_own_key_when_it_has_one(self):
+        # what VkKeyScanEx answers: the key in the low byte, shift (1) and ctrl+alt (6) in the high
+        self.assertEqual(inject.layout_stroke(0x0041), (0x41, False, False))      # a
+        self.assertEqual(inject.layout_stroke(0x0141), (0x41, True, False))       # A
+        self.assertEqual(inject.layout_stroke(0x0632), (0x32, False, True))       # @ on a Nordic layout: AltGr + 2
+        self.assertIsNone(inject.layout_stroke(-1), "no key for it: sent as itself")
+        self.assertIsNone(inject.layout_stroke(0x0241), "ctrl + a is a command, not a character")
+
     def test_a_point_maps_onto_the_whole_desktop(self):
         desk = (-1920, 0, 3840, 1080)   # a monitor to the left of the main one
         self.assertEqual(inject.normalized(-1920, 0, desk), (0, 0))
@@ -68,17 +85,22 @@ class Keys(unittest.TestCase):
 
 
 class StartMenu(unittest.TestCase):
-    def test_programs_are_listed_once_and_uninstallers_left_out(self):
-        with tempfile.TemporaryDirectory() as d:
-            all_users, mine = Path(d) / "all", Path(d) / "mine"
-            for folder, names in ((all_users / "Tools", ["Notepad++", "Uninstall Notepad++"]), (mine, ["Spotify", "Notepad++"])):
-                folder.mkdir(parents=True)
-                for name in names:
-                    (folder / f"{name}.lnk").write_bytes(b"")
-            apps = catalog.scan_apps([all_users, mine])
-            self.assertEqual([a["name"] for a in apps], ["Notepad++", "Spotify"])
-            self.assertEqual(apps[0]["id"], "notepad")
-            self.assertTrue(apps[0]["path"].startswith(str(mine)), "the user's own entry wins")
+    def test_programs_and_store_apps_are_listed_once_and_uninstallers_left_out(self):
+        text = '''[{"Name":"Notepad","AppID":"Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"},
+                   {"Name":"Spotify","AppID":"Spotify.exe"},
+                   {"Name":"Uninstall Spotify","AppID":"{6D809377}\\\\Spotify\\\\uninstall.exe"},
+                   {"Name":"Notepad","AppID":"another"},
+                   {"Name":"Vendor website","AppID":"https://example.com"},
+                   {"Name":"","AppID":"x"}]'''
+        apps = catalog.parse_start_apps(text)
+        self.assertEqual([a["name"] for a in apps], ["Notepad", "Spotify"])
+        self.assertEqual(apps[0]["id"], "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App")
+        self.assertEqual(apps[0]["path"], "shell:AppsFolder\\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App")
+
+    def test_a_lone_app_and_no_answer_are_both_fine(self):
+        self.assertEqual(len(catalog.parse_start_apps('{"Name":"Paint","AppID":"p"}')), 1)
+        self.assertEqual(catalog.parse_start_apps(""), [])
+        self.assertEqual(catalog.parse_start_apps("not json"), [])
 
 
 if __name__ == "__main__":

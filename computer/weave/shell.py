@@ -3,8 +3,11 @@ question, the lock, whether a text field has the focus, and the network card to 
 weave/win/shell.py answers the same on Windows."""
 
 import asyncio
+import fcntl
 import json
 import os
+import socket
+import struct
 
 from .proc import run
 
@@ -69,3 +72,26 @@ async def wake_info() -> dict | None:
         return {"mac": mac, "brd": brd, "wifi": wifi}
     except (OSError, ValueError):
         return None
+
+
+async def prewarm():
+    """Nothing here is slow enough to do ahead on Linux."""
+
+
+def local_addresses() -> list[str] | None:
+    """This computer's addresses on the networks it is really plugged into: its Wi-Fi and wired
+    cards. Bridges, containers' ends and tunnels have addresses too, but no phone reaches them."""
+    out = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            for name in sorted(os.listdir("/sys/class/net")):
+                if not os.path.exists(f"/sys/class/net/{name}/device"):
+                    continue   # not a card
+                try:
+                    packed = fcntl.ioctl(s.fileno(), 0x8915, struct.pack("256s", name.encode()[:15]))   # SIOCGIFADDR
+                    out.append(socket.inet_ntoa(packed[20:24]))
+                except OSError:
+                    continue   # a card with no address: unplugged, or off
+    except OSError:
+        return None
+    return out

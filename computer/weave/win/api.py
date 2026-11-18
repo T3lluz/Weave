@@ -102,3 +102,7 @@ if WINDOWS:
     kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+    user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
+    user32.GetKeyboardLayout.restype = wintypes.HKL
+    user32.VkKeyScanExW.argtypes = [wintypes.WCHAR, wintypes.HKL]
+    user32.VkKeyScanExW.restype = ctypes.c_short

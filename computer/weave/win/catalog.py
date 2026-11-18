@@ -1,5 +1,6 @@
-"""What the PC can do for a shortcut, on Windows: the programs in the Start menu, with their
-icons, and opening one or a web page. There are no bindings to list: Windows has no file of them."""
+"""What the PC can do for a shortcut, on Windows: everything in the Start menu, programs and
+Store apps alike, with their icons, and opening one or a web page. There are no bindings to
+list: Windows has no file of them."""
 
 import asyncio
 import base64
@@ -7,7 +8,7 @@ import hashlib
 import json
 import os
 import time
-from pathlib import Path
+from pathlib import Path   # noqa: F401  (kept for callers that type against it)
 
 from ..config import DATA_DIR
 from ..proc import run
@@ -21,28 +22,31 @@ _apps_cache: tuple[float, list[dict]] | None = None
 _apps_lock = asyncio.Lock()
 
 
-def start_menus() -> list[Path]:
-    roots = [os.environ.get("ProgramData"), os.environ.get("APPDATA")]
-    return [Path(r) / "Microsoft" / "Windows" / "Start Menu" / "Programs" for r in roots if r]
-
-
-def app_id(name: str) -> str:
-    """A name the phone can keep: the entry's own, lower case, with nothing a JSON key minds."""
-    return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
-
-
-def scan_apps(menus: list[Path] | None = None) -> list[dict]:
-    """Every program shortcut of the Start menu, once each by name, the user's own winning."""
+def parse_start_apps(text: str) -> list[dict]:
+    """Windows' own list of what the Start menu holds (Get-StartApps, as JSON), as apps: every
+    program and every Store app, once each by name, without the uninstallers and read-me files."""
+    try:
+        raw = json.loads(text or "[]")
+    except ValueError:
+        return []
+    if isinstance(raw, dict):
+        raw = [raw]   # PowerShell gives a lone entry without its list
     seen: dict[str, dict] = {}
-    for menu in (menus if menus is not None else start_menus()):
-        if not menu.is_dir():
+    for entry in raw:
+        name, key = str(entry.get("Name") or "").strip(), str(entry.get("AppID") or "").strip()
+        if not name or not key or any(word in name.lower() for word in SKIP):
             continue
-        for link in sorted(menu.rglob("*.lnk")):
-            name = link.stem
-            if any(word in name.lower() for word in SKIP):
-                continue
-            seen[app_id(name)] = {"id": app_id(name), "name": name, "path": str(link)}
+        # a web link the Start menu lists is no program
+        if key.lower().startswith(("http://", "https://")):
+            continue
+        seen.setdefault(name.lower(), {"id": key, "name": name, "path": "shell:AppsFolder\\" + key})
     return sorted(seen.values(), key=lambda a: a["name"].lower())
+
+
+async def scan_apps() -> list[dict]:
+    out = await run("powershell.exe", "-NoProfile", "-Command",
+                    "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-StartApps | ConvertTo-Json -Compress", timeout=30)
+    return parse_start_apps(out)
 
 
 # One PowerShell run draws every missing icon: the shell's own picture of each shortcut at
@@ -81,12 +85,8 @@ foreach ($job in (Get-Content -Raw -Encoding UTF8 $list | ConvertFrom-Json)) {
 
 
 def icon_file(app: dict) -> Path:
-    """Where an app's icon is kept: named after the shortcut and when it last changed."""
-    try:
-        stamp = int(os.path.getmtime(app["path"]))
-    except OSError:
-        stamp = 0
-    return DATA_DIR / "icons" / (hashlib.sha1(f"{app['path']}:{stamp}:{ICON_PX}".encode()).hexdigest()[:20] + ".png")
+    """Where an app's icon is kept, by what Windows calls the app."""
+    return DATA_DIR / "icons" / (hashlib.sha1(f"{app['id']}:{ICON_PX}".encode()).hexdigest()[:20] + ".png")
 
 
 async def draw_icons(apps: list[dict]):
@@ -109,14 +109,14 @@ async def apps(with_icons: bool = True) -> list[dict]:
         if _apps_cache and time.monotonic() - _apps_cache[0] < APPS_TTL:
             found = _apps_cache[1]
         else:
-            found = await asyncio.to_thread(scan_apps)
+            found = await scan_apps() or (_apps_cache[1] if _apps_cache else [])
             _apps_cache = (time.monotonic(), found)
         if with_icons:
             await draw_icons(found)
     out = [{"id": a["id"], "name": a["name"]} for a in found]
     for a, o in zip(found, out):
         if not with_icons:
-            o["has_icon"] = True   # every shortcut has a picture: the shell draws one for anything
+            o["has_icon"] = True   # every app has a picture: the shell draws one for anything
             continue
         try:
             o["icon"] = base64.b64encode(icon_file(a).read_bytes()).decode()
@@ -132,8 +132,8 @@ def app_name(wanted: str) -> str | None:
 
 
 async def launch(wanted: str) -> str:
-    """Opens a program by its Start menu entry, as a click there would: "ok", "gone" or "failed".
-    One already running comes to the front when it is the kind that keeps to one window."""
+    """Opens an app as a click on its Start menu entry would: "ok", "gone" or "failed". One
+    already running comes to the front when it is the kind that keeps to one window."""
     await apps(with_icons=False)
     app = next((a for a in (_apps_cache[1] if _apps_cache else []) if a["id"] == wanted), None)
     if not app:
