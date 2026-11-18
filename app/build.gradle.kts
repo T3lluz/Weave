@@ -16,9 +16,15 @@ android {
         applicationId = "com.t3lluz.weave"
         minSdk = 26
         targetSdk = 35
-        // CI passes these (the commit count), so a release never needs a version-bump commit
-        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
-        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.0-dev"
+        // CI passes these (the commit count), so a release never needs a version-bump commit. A
+        // build made here counts the commits too, so the newest release never offers itself as
+        // an update to a test build of the same code or newer.
+        val commits = providers.exec {
+            commandLine("git", "rev-list", "--count", "HEAD")
+            isIgnoreExitValue = true
+        }.standardOutput.asText.map { it.trim().toIntOrNull() ?: 1 }
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: commits.get()
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.${commits.get()}-dev"
 
         val localProperties = Properties()
         val localPropertiesFile = rootProject.file("local.properties")

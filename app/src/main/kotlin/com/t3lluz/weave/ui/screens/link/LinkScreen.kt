@@ -495,7 +495,8 @@ private fun Upright(
                 ShortcutRow(
                     shortcuts = shortcuts, store = viewModel.shortcutStore,
                     arranging = arranging, onArranging = onArranging,
-                    onRun = { session.run(it) }, onAdd = onAddShortcut, onEdit = onEditShortcut,
+                    onRun = { viewModel.runShortcut(it) }, onAdd = onAddShortcut, onEdit = onEditShortcut,
+                    onSetOn = { s, on -> viewModel.setShortcutOn(s, on) },
                     onRemove = { viewModel.removeShortcut(it.id) },
                     grid = !showPicture,
                     modifier = Modifier.padding(top = 6.dp),

@@ -9,7 +9,7 @@ The laptop side is tandem for now, the daemon DailyDash's laptop screen talks to
 - The laptop's screen, live. Pinch to zoom; the view follows the pointer and slides across when the pointer moves to another monitor.
 - A trackpad. One finger moves, a tap clicks, a held finger drags, two fingers scroll, a two-finger tap is the right button.
 - The phone's keyboard types on the laptop. It comes up by itself when a click lands in a text field.
-- Shortcuts over the trackpad: an app, a web page, a key combo or a line of text. Make one by hand or describe it to Claude ("switch to workspace 3").
+- Shortcuts over the trackpad, one step or several: bring an app to the front, open a page, press keys, type, wait. Describe one to Claude ("deafen me on Discord") and it plans the steps and picks icons, or build it by hand. A shortcut can flip between two looks, like Deafen and Undeafen.
 - Fold the screen away to make the phone one big trackpad, and fold the shortcuts away to give the pad their room.
 - The laptop's sound on the phone, the phone's sound on the laptop, media keys, the clipboard both ways, and lock.
 

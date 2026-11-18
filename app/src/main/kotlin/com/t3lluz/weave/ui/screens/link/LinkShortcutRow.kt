@@ -1,5 +1,13 @@
 package com.t3lluz.weave.ui.screens.link
 
+import com.t3lluz.weave.data.link.LinkStep
+import com.t3lluz.weave.data.link.LinkGlyph
+import coil.request.ImageRequest
+import coil.decode.SvgDecoder
+import coil.compose.AsyncImage
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.ColorFilter
 import android.graphics.BitmapFactory
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -93,6 +101,7 @@ import com.t3lluz.weave.ui.theme.LinkShortcutTone
 import com.t3lluz.weave.ui.theme.AppMotion
 import com.t3lluz.weave.ui.theme.Surface
 import com.t3lluz.weave.ui.theme.TextPrimary
+import com.t3lluz.weave.ui.theme.TextSecondary
 import com.t3lluz.weave.ui.theme.TextTertiary
 import com.t3lluz.weave.ui.util.rememberHaptics
 import com.t3lluz.weave.ui.util.rememberReducedMotion
@@ -169,6 +178,7 @@ internal fun ShortcutRow(
     onAdd: () -> Unit,
     onEdit: (LinkShortcut) -> Unit,
     onRemove: (LinkShortcut) -> Unit,
+    onSetOn: (LinkShortcut, Boolean) -> Unit = { _, _ -> },
     grid: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -317,7 +327,7 @@ internal fun ShortcutRow(
                             .zIndex(if (held) 1f else 0f)
                             .semantics {
                                 role = Role.Button
-                                contentDescription = s.label
+                                contentDescription = s.shownLabel
                                 onClick(label = if (arranging) "Change" else "Do it") { if (isArranging) edit() else run(); true }
                                 onLongClick(label = "Change, arrange or remove") { menuFor = s.id; true }
                                 // arranging without a drag, for a screen reader
@@ -468,6 +478,12 @@ internal fun ShortcutRow(
                             RemoveBadge(s.label, Modifier.align(Alignment.TopStart).offset((-5).dp, (-5).dp)) { onRemove(s) }
                         }
                         DropdownMenu(expanded = menuFor == s.id, onDismissRequest = { menuFor = null }, modifier = Modifier.background(Surface)) {
+                            if (s.toggle != null) {
+                                // the laptop changed without the button (deafened from Discord itself): set the look to match
+                                MenuRow(if (s.on) "Show as ${s.label}" else "Show as ${s.toggle.label.ifBlank { "on" }}", AppIcons.Repeat) {
+                                    menuFor = null; onSetOn(s, !s.on)
+                                }
+                            }
                             MenuRow("Change", AppIcons.Edit) { menuFor = null; edit() }
                             MenuRow("Arrange", AppIcons.Move) { menuFor = null; onArranging(true) }
                             MenuRow("Remove", AppIcons.Delete, danger = true) { menuFor = null; onRemove(s) }
@@ -516,51 +532,117 @@ internal class TileFx {
 
 /**
  * One shortcut: its picture over its name. A tap lights it for a moment and its picture hops.
- * [picture] stands in for the one on disk (an app's icon not saved yet); a shortcut with no name
- * or key yet shows what it will be.
+ * One with two looks shows the one it is in, lit in its colour while on; one of several steps
+ * says how many on its corner. [picture] stands in for the one on disk (an app's icon not saved
+ * yet); a shortcut with no key yet shows what it will be.
  */
 @Composable
 internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                val k = 1f - 0.06f * fx.press.value
-                scaleX = k
-                scaleY = k
+    val glyph = s.shownGlyph
+    val lit = s.toggle != null && s.on
+    val tone = glyphTone(glyph)
+    val actions = s.steps.count { it.kind != LinkShortcutKind.WAIT }
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val k = 1f - 0.06f * fx.press.value
+                    scaleX = k
+                    scaleY = k
+                }
+                .clip(TileShape)
+                .drawBehind {
+                    drawRect(ShortcutFill)
+                    if (lit) drawRect(tone.copy(alpha = 0.24f))
+                    if (fx.flash.value > 0f) drawRect(tone.copy(alpha = 0.34f * fx.flash.value))
+                }
+                .padding(horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(Modifier.height(26.dp).graphicsLayer { scaleX = fx.hop.value; scaleY = fx.hop.value }, contentAlignment = Alignment.Center) {
+                val lead = s.lead
+                when {
+                    glyph != null -> GlyphFace(glyph, store, icons, badgeApp = s.appId)
+                    lead == null || (lead.kind == LinkShortcutKind.KEYS && lead.key.isBlank()) ->
+                        Icon(AppIcons.Keyboard, null, tint = LinkShortcutTone, modifier = Modifier.size(22.dp))
+                    else -> StepFace(lead, store, icons, picture = picture)
+                }
             }
-            .clip(TileShape)
-            .drawBehind {
-                drawRect(ShortcutFill)
-                if (fx.flash.value > 0f) drawRect(LinkShortcutTone.copy(alpha = 0.34f * fx.flash.value))
-            }
-            .padding(horizontal = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(Modifier.height(26.dp).graphicsLayer { scaleX = fx.hop.value; scaleY = fx.hop.value }, contentAlignment = Alignment.Center) {
-            if (s.kind == LinkShortcutKind.KEYS && s.key.isBlank()) {
-                Icon(AppIcons.Keyboard, null, tint = LinkShortcutTone, modifier = Modifier.size(22.dp))
-            } else {
-                ShortcutFace(s, store, icons, picture = picture)
+            Spacer(Modifier.height(7.dp))
+            Text(
+                s.shownLabel.ifBlank { "Shortcut" }, color = if (s.shownLabel.isBlank()) TextTertiary else TextPrimary,
+                fontSize = 11.sp, fontWeight = FontWeight.Medium, lineHeight = 13.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+            )
+        }
+        if (actions > 1) {
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(5.dp).size(15.dp).clip(CircleShape).background(LinkShortcutTone.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("$actions", color = LinkShortcutTone, fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = 9.sp)
             }
         }
-        Spacer(Modifier.height(7.dp))
-        Text(
-            s.label.ifBlank { "Shortcut" }, color = if (s.label.isBlank()) TextTertiary else TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium, lineHeight = 13.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-        )
     }
 }
 
-/** What a shortcut shows: the app's own icon, the site's, a keycap with its key, or the type glyph. */
+/** A glyph's colour, or the shortcuts' yellow for one that has none. */
+internal fun glyphTone(g: LinkGlyph?): Color = g?.color?.let { Color(it.toInt()) } ?: LinkShortcutTone
+
+/**
+ * A shortcut's own picture: its Iconify icon in its colour, from disk once kept, straight from
+ * Iconify until then. [badgeApp] puts that app's own icon on its corner (Discord's deafen
+ * headphones with Discord's logo by them).
+ */
 @Composable
-internal fun ShortcutFace(s: LinkShortcut, store: LinkShortcutStore, icons: Int, size: androidx.compose.ui.unit.Dp = 26.dp, picture: ImageBitmap? = null) {
+internal fun GlyphFace(glyph: LinkGlyph, store: LinkShortcutStore, icons: Int, size: Dp = 26.dp, badgeApp: String? = null) {
+    val context = LocalContext.current
+    val file = remember(glyph.id, icons) { store.glyphFile(glyph.id) }
+    val request = remember(glyph.id, file) {
+        val (prefix, name) = glyph.id.split(':', limit = 2)
+        ImageRequest.Builder(context)
+            .data(file ?: "https://api.iconify.design/$prefix/$name.svg")
+            .decoderFactory(SvgDecoder.Factory())
+            .build()
+    }
+    Box(Modifier.size(size + if (badgeApp != null) 4.dp else 0.dp)) {
+        AsyncImage(
+            model = request, contentDescription = null,
+            colorFilter = ColorFilter.tint(glyphTone(glyph)),
+            modifier = Modifier.size(size).align(Alignment.Center),
+        )
+        if (badgeApp != null) {
+            val badge by produceState<ImageBitmap?>(null, badgeApp, icons) {
+                value = withContext(Dispatchers.IO) {
+                    store.appIconFile(badgeApp)?.let { f -> runCatching { BitmapFactory.decodeFile(f.path)?.asImageBitmap() }.getOrNull() }
+                }
+            }
+            badge?.let {
+                Image(
+                    it, null,
+                    modifier = Modifier.align(Alignment.BottomEnd).offset(4.dp, 3.dp).size(size * 0.5f)
+                        .clip(CircleShape).background(ShortcutFill).padding(1.5.dp),
+                )
+            }
+        }
+    }
+}
+
+/** What one step shows: its app's own icon, its site's, a keycap with its key, the type glyph, a clock. */
+@Composable
+internal fun StepFace(s: LinkStep, store: LinkShortcutStore, icons: Int, size: Dp = 26.dp, picture: ImageBitmap? = null) {
     when (s.kind) {
-        LinkShortcutKind.KEYS -> Keycap(s.cap.ifBlank { s.key }, LinkShortcutTone, big = size > 30.dp)
+        LinkShortcutKind.KEYS -> if (s.key.isBlank()) {
+            Icon(AppIcons.Keyboard, null, tint = LinkShortcutTone, modifier = Modifier.size(size * 0.85f))
+        } else {
+            Keycap(s.cap.ifBlank { s.key }, LinkShortcutTone, big = size > 30.dp)
+        }
         LinkShortcutKind.TEXT -> Icon(AppIcons.TypeText, null, tint = LinkShortcutTone, modifier = Modifier.size(size * 0.85f))
+        LinkShortcutKind.WAIT -> Icon(AppIcons.Clock, null, tint = TextSecondary, modifier = Modifier.size(size * 0.8f))
         LinkShortcutKind.APP, LinkShortcutKind.SITE -> {
-            val image = picture ?: rememberShortcutPicture(s, store, icons)
+            val image = picture ?: rememberStepPicture(s, store, icons)
             when {
                 image != null -> Image(
                     image, null,
@@ -573,9 +655,9 @@ internal fun ShortcutFace(s: LinkShortcut, store: LinkShortcutStore, icons: Int,
     }
 }
 
-/** A shortcut's picture from disk, read off the main thread; read again when a new one lands. */
+/** A step's picture from disk, read off the main thread; read again when a new one lands. */
 @Composable
-private fun rememberShortcutPicture(s: LinkShortcut, store: LinkShortcutStore, icons: Int): ImageBitmap? {
+private fun rememberStepPicture(s: LinkStep, store: LinkShortcutStore, icons: Int): ImageBitmap? {
     val image by produceState<ImageBitmap?>(null, s.kind, s.app, s.url, icons) {
         value = withContext(Dispatchers.IO) {
             store.iconFile(s)?.let { f -> runCatching { BitmapFactory.decodeFile(f.path)?.asImageBitmap() }.getOrNull() }

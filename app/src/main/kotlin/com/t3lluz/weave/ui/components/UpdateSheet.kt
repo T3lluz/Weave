@@ -225,7 +225,9 @@ fun NotesRoom(notes: String, modifier: Modifier = Modifier) {
  */
 @Composable
 fun NotesText(markdown: String, modifier: Modifier = Modifier) {
-    val lines = markdown.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("<!--") }
+    // the sheet and the Updates page link the release themselves
+    val lines = markdown.lines().map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("<!--") && !plain(it).trim().equals("View release on GitHub", ignoreCase = true) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         lines.forEach { raw ->
             val text = plain(raw)

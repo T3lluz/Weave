@@ -1,5 +1,6 @@
 package com.t3lluz.weave.ui.screens.link
 
+import com.t3lluz.weave.ui.components.PillButton
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
@@ -82,6 +83,7 @@ import com.t3lluz.weave.data.link.LinkBind
 import com.t3lluz.weave.data.link.LinkKeys
 import com.t3lluz.weave.data.link.LinkSession
 import com.t3lluz.weave.data.link.LinkShortcut
+import com.t3lluz.weave.data.link.LinkStep
 import com.t3lluz.weave.data.link.LinkShortcutKind
 import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.ShortcutAnswer
@@ -138,8 +140,8 @@ import kotlinx.coroutines.launch
 private val Well = Color.White.copy(alpha = 0.06f)
 private val WellShape = RoundedCornerShape(18.dp)
 
-/** Things to ask for before anything has been asked: small, everyday, one step each. */
-private val STARTERS = listOf("Workspace 2", "Close the window", "Open youtube.com", "Take a screenshot", "Open a terminal", "Next song")
+/** Things to ask for before anything has been asked: everyday ones, a few of them several steps. */
+private val STARTERS = listOf("Deafen me on Discord", "Mute my mic on Discord", "Workspace 2", "Play or pause Spotify", "Take a screenshot", "Open youtube.com")
 
 /** One ask in the sheet: what was said, and what came back (null while the AI works on it). */
 internal data class AskTurn(
@@ -158,10 +160,16 @@ internal data class AskTurn(
  */
 @Stable
 internal class ShortcutSheetState(val initial: LinkShortcut?, canList: Boolean) {
-    var draft by mutableStateOf(initial ?: LinkShortcut(kind = if (canList) LinkShortcutKind.APP else LinkShortcutKind.SITE, label = ""))
+    var draft by mutableStateOf(
+        initial ?: LinkShortcut(label = "", steps = listOf(LinkStep(if (canList) LinkShortcutKind.APP else LinkShortcutKind.SITE))),
+    )
+    // the step the pickers change
+    var editing by mutableIntStateOf(0)
+    // which look the icon room changes: the usual one, or a two-look shortcut's look while on
+    var lookOn by mutableStateOf(false)
     // a name typed by hand is kept; until then each pick names the shortcut
     var named by mutableStateOf(initial != null)
-    var urlTyped by mutableStateOf(initial?.url?.removePrefix("https://").orEmpty())
+    var urlTyped by mutableStateOf(initial?.steps?.firstOrNull()?.url?.removePrefix("https://").orEmpty())
     // the binding picked, by what it does: two of the laptop's can share the same keys
     var pickedBind by mutableStateOf<String?>(null)
     // bumps with each AI answer, so the pickers start from what it made
@@ -184,9 +192,11 @@ private object KeepSheetStill : NestedScrollConnection {
 /**
  * Making a shortcut, or changing one. At the top, the shortcut as it will stand in the row, its
  * name to change in place and what it does in words. Under it, ask the AI (it reads the laptop's
- * own apps and bindings, says what it is doing as it works and what it made, and takes a
- * follow-up: "make it workspace 4"), or pick it by hand: one of the laptop's apps, a web page, a
- * key or words to type. Try it runs it on the laptop before it is kept.
+ * own apps and bindings, plans the steps, picks icons, says what it is doing as it works and
+ * what it made, and takes a follow-up: "make it workspace 4"), or build it by hand: its steps in
+ * order (an app to bring to the front, a web page, keys, words to type, a wait), each picked
+ * below, and its icon, with a second look for one that flips on and off. Try it runs it on the
+ * laptop before it is kept.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -209,6 +219,8 @@ internal fun LinkShortcutSheet(
 
     val initial = sheet.initial
     var draft by sheet::draft
+    var editing by sheet::editing
+    var lookOn by sheet::lookOn
     var named by sheet::named
     var urlTyped by sheet::urlTyped
     var pickedBind by sheet::pickedBind
@@ -224,19 +236,30 @@ internal fun LinkShortcutSheet(
     val aiReady = ai.current?.ready ?: viewModel.aiReady()
     // Try it needs only what the shortcut does, not its name
     val doable = draft.copy(label = draft.label.ifBlank { "-" }).complete
+    if (editing > draft.steps.lastIndex) editing = draft.steps.lastIndex
+    /** The step the pickers below change. */
+    val step = draft.steps[editing.coerceIn(0, draft.steps.lastIndex)]
+    fun setStep(next: LinkStep) {
+        draft = draft.copy(steps = draft.steps.toMutableList().also { it[editing] = next })
+    }
+    fun appName(id: String): String? = catalog?.apps?.firstOrNull { it.id == id }?.name
 
     fun lightUp() {
         scope.launch { fx.flash.snapTo(1f); fx.flash.animateTo(0f, tween(AppMotion.Link.FLASH_MS)) }
         scope.launch { fx.hop.snapTo(0.78f); fx.hop.animateTo(1f, AppMotion.Link.press()) }
     }
 
-    /** The name a pick gives a shortcut: the app's, the site's, the binding's, the words' first line. */
-    fun autoName(x: LinkShortcut): String = when (x.kind) {
-        LinkShortcutKind.APP -> catalog?.apps?.firstOrNull { it.id == x.app }?.name.orEmpty()
+    /** The name a pick gives a step: the app's, the site's, the binding's, the words' first line. */
+    fun nameFor(x: LinkStep): String = when (x.kind) {
+        LinkShortcutKind.APP -> appName(x.app).orEmpty()
         LinkShortcutKind.SITE -> if (x.url.isEmpty()) "" else siteName(x.url)
         LinkShortcutKind.KEYS -> if (x.key.isBlank()) "" else (pickedBind ?: bindFor(catalog?.binds, x)?.label)?.let(::bindName) ?: LinkKeys.combo(x.mods, x.cap)
         LinkShortcutKind.TEXT -> x.text.lineSequence().firstOrNull().orEmpty()
+        LinkShortcutKind.WAIT -> ""
     }.take(LABEL_MAX)
+
+    /** The name the shortcut gets from its picks: its last step's that does something, as that is what it is for. */
+    fun autoName(x: LinkShortcut): String = x.steps.lastOrNull { it.kind != LinkShortcutKind.WAIT }?.let(::nameFor).orEmpty()
 
     /** Whether the name still follows the picks: nothing typed for it, or still the name the last pick gave. */
     fun follows() = !named || draft.label.isBlank() || draft.label.equals(autoName(draft), ignoreCase = true)
@@ -262,16 +285,18 @@ internal fun LinkShortcutSheet(
                         pickedBind = null
                         // a name typed here before there was anything to send is kept; the AI never saw it
                         val typedName = draft.label.takeIf { named && it.isNotBlank() && !draft.complete }
-                        val made = answer.shortcut.copy(id = draft.id, label = typedName ?: answer.shortcut.label)
+                        val made = answer.shortcut.copy(id = draft.id, label = typedName ?: answer.shortcut.label, on = false)
                         // a name the pick would give anyway ("Workspace 3") follows the next pick; one of its own
                         // ("Desk 3", asked for, or typed here) is kept like a typed one
                         named = typedName != null || !made.label.equals(autoName(made), ignoreCase = true)
                         draft = made
-                        if (made.kind == LinkShortcutKind.SITE) urlTyped = made.url.removePrefix("https://")
+                        editing = 0
+                        lookOn = false
+                        urlTyped = made.steps.first().url.removePrefix("https://")
                         answered++
                         lightUp()
                         val said = answer.reply.ifBlank {
-                            describeShortcut(made, laptopName, catalog?.apps?.firstOrNull { it.id == made.app }?.name)?.plus(".").orEmpty()
+                            describeShortcut(made, laptopName, ::appName)?.plus(".").orEmpty()
                         }
                         turns[i] = turns[i].copy(reply = said, made = true)
                     }
@@ -289,18 +314,27 @@ internal fun LinkShortcutSheet(
         }
     }
 
-    fun pick(next: LinkShortcut, name: String, follow: Boolean = follows()) {
-        draft = if (follow) next.copy(label = name.take(LABEL_MAX)) else next
+    /** A step picked by hand. The name follows it while the step is the one that names the shortcut. */
+    fun pick(next: LinkStep, name: String, follow: Boolean = follows()) {
+        setStep(next)
+        if (follow) draft = draft.copy(label = autoName(draft).ifBlank { name.take(LABEL_MAX) })
+    }
+
+    /** Moves to another step, its address field following it. */
+    fun edit(i: Int) {
+        editing = i
+        pickedBind = null
+        urlTyped = draft.steps.getOrNull(i)?.url?.removePrefix("https://").orEmpty()
     }
 
     // a site's own picture and name while its address is typed, once the typing stops
-    LaunchedEffect(draft.kind, draft.url) {
-        if (draft.kind != LinkShortcutKind.SITE || draft.url.isEmpty() || draft.url == initial?.url) return@LaunchedEffect
+    LaunchedEffect(step.kind, step.url) {
+        if (step.kind != LinkShortcutKind.SITE || step.url.isEmpty() || initial?.steps?.any { it.url == step.url } == true) return@LaunchedEffect
         delay(650)
-        val own = viewModel.previewSite(draft.url) ?: return@LaunchedEffect
+        val own = viewModel.previewSite(step.url) ?: return@LaunchedEffect
         // "Github" becomes "GitHub", the name the site gives itself, only while the name is the
         // address's: one typed here or given by the AI ("Notifications") stays
-        if (draft.kind == LinkShortcutKind.SITE && !named && (draft.label.isBlank() || draft.label.equals(siteName(draft.url), ignoreCase = true))) {
+        if (!named && (draft.label.isBlank() || draft.label.equals(siteName(step.url), ignoreCase = true))) {
             draft = draft.copy(label = own.take(LABEL_MAX))
             named = false
         }
@@ -401,26 +435,68 @@ internal fun LinkShortcutSheet(
                     }
                 }
 
-                // or pick it
+                // its steps, in order
+                StepsRoom(
+                    steps = draft.steps, editing = editing, laptopName = laptopName, store = viewModel.shortcutStore,
+                    appName = ::appName,
+                    onEdit = ::edit,
+                    onMove = { from, to ->
+                        val list = draft.steps.toMutableList().apply { add(to, removeAt(from)) }
+                        draft = draft.copy(steps = list)
+                        editing = to
+                    },
+                    onRemove = { at ->
+                        val list = draft.steps.toMutableList().apply { removeAt(at) }
+                        draft = draft.copy(steps = list).let { if (follows()) it.copy(label = autoName(it)) else it }
+                        edit((at - 1).coerceAtLeast(0).coerceAtMost(list.lastIndex))
+                    },
+                    onAdd = { kind ->
+                        val next = when (kind) {
+                            LinkShortcutKind.WAIT -> LinkStep(kind, ms = 1000)
+                            else -> LinkStep(kind)
+                        }
+                        draft = draft.copy(steps = draft.steps + next)
+                        edit(draft.steps.lastIndex)
+                    },
+                )
+
+                // the step being changed
                 HealthSection(tone = LinkShortcutTone) {
-                    RoomTitle(AppIcons.Bolt, "Or pick it", LinkShortcutTone)
+                    RoomTitle(AppIcons.Bolt, if (draft.steps.size > 1) "Step ${editing + 1}" else "Or pick it", LinkShortcutTone)
                     Segmented(
-                        listOf(LinkShortcutKind.APP to "App", LinkShortcutKind.SITE to "Site", LinkShortcutKind.KEYS to "Keys", LinkShortcutKind.TEXT to "Text"),
-                        picked = draft.kind, tone = LinkShortcutTone,
+                        listOf(
+                            LinkShortcutKind.APP to "App", LinkShortcutKind.SITE to "Site", LinkShortcutKind.KEYS to "Keys",
+                            LinkShortcutKind.TEXT to "Text", LinkShortcutKind.WAIT to "Wait",
+                        ),
+                        picked = step.kind, tone = LinkShortcutTone,
                     ) { kind ->
-                        val next = draft.copy(kind = kind, url = if (kind == LinkShortcutKind.SITE) normalizeShortcutUrl(urlTyped).orEmpty() else draft.url)
-                        draft = if (follows()) next.copy(label = autoName(next)) else next
+                        val next = step.copy(
+                            kind = kind,
+                            url = if (kind == LinkShortcutKind.SITE) normalizeShortcutUrl(urlTyped).orEmpty() else step.url,
+                            ms = if (kind == LinkShortcutKind.WAIT && step.ms == 0) 1000 else step.ms,
+                        )
+                        val follow = follows()
+                        setStep(next)
+                        if (follow) draft = draft.copy(label = autoName(draft))
                     }
                     Spacer(Modifier.height(12.dp))
                     AnimatedContent(
-                        targetState = draft.kind,
+                        targetState = step.kind,
                         transitionSpec = { fadeIn(AppMotion.fadeTween()) togetherWith fadeOut(AppMotion.fadeTween()) },
                         label = "kind",
                     ) { kind ->
-                        key(answered) { when (kind) {
-                            LinkShortcutKind.APP -> AppPicker(
-                                apps = catalog?.apps, canList = canList, laptopName = laptopName, picked = draft.app,
-                            ) { app -> pick(draft.copy(app = app.id), app.name) }
+                        key(answered, editing) { when (kind) {
+                            LinkShortcutKind.APP -> Column {
+                                AppPicker(
+                                    apps = catalog?.apps, canList = canList, laptopName = laptopName, picked = step.app,
+                                ) { app -> pick(step.copy(app = app.id), app.name) }
+                                if (draft.steps.size > 1) {
+                                    Text(
+                                        "If it's open already, it comes to the front, and the next step waits for it.",
+                                        color = TextTertiary, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+                                    )
+                                }
+                            }
                             LinkShortcutKind.SITE -> Column {
                                 LinkField(
                                     urlTyped,
@@ -429,38 +505,51 @@ internal fun LinkShortcutSheet(
                                         val url = normalizeShortcutUrl(typed).orEmpty()
                                         // the name the site gave itself ("YouTube", "Google Maps") stays while the address
                                         // stays on that site; a new site starts from its address
-                                        val sameSite = !named && draft.label.isNotBlank() && hostOf(draft.url) != null && hostOf(draft.url) == hostOf(url)
+                                        val sameSite = !named && draft.label.isNotBlank() && hostOf(step.url) != null && hostOf(step.url) == hostOf(url)
                                         val name = when {
                                             url.isEmpty() -> ""
                                             sameSite -> draft.label
                                             else -> siteName(url).let { n -> if (n.equals(draft.label, ignoreCase = true)) draft.label else n }.take(LABEL_MAX)
                                         }
-                                        draft = if (follows()) draft.copy(url = url, label = name) else draft.copy(url = url)
+                                        val follow = follows()
+                                        setStep(step.copy(url = url))
+                                        if (follow) draft = draft.copy(label = name)
                                     },
                                     "youtube.com", keyboardType = KeyboardType.Uri, leading = AppIcons.Globe,
                                 )
-                                if (urlTyped.isNotBlank() && draft.url.isEmpty()) {
+                                if (urlTyped.isNotBlank() && step.url.isEmpty()) {
                                     Text("That isn't a web address.", color = TextSecondary, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
                                 }
                             }
-                            LinkShortcutKind.KEYS -> KeysPicker(catalog?.binds, laptopName, draft, pickedBind) { next, name, bind ->
+                            LinkShortcutKind.KEYS -> KeysPicker(catalog?.binds, laptopName, step, pickedBind) { next, name, bind ->
                                 // asked before the binding changes: the old name is the old binding's
                                 val follow = follows()
                                 pickedBind = bind
                                 pick(next, name, follow)
                             }
                             LinkShortcutKind.TEXT -> LinkField(
-                                draft.text,
+                                step.text,
                                 { typed ->
                                     // one line, as the AI's words are: a line break is Enter, and in a terminal it runs what came before it
                                     val t = typed.replace("\r", "").replace('\n', ' ')
-                                    draft = if (follows()) draft.copy(text = t, label = t.take(LABEL_MAX)) else draft.copy(text = t)
+                                    val follow = follows()
+                                    setStep(step.copy(text = t))
+                                    if (follow) draft = draft.copy(label = autoName(draft))
                                 },
                                 "Words to type on $laptopName",
                             )
+                            LinkShortcutKind.WAIT -> WaitPicker(step.ms) { setStep(step.copy(ms = it)) }
                         } }
                     }
                 }
+
+                // how it looks
+                LookRoom(
+                    draft = draft, lookOn = lookOn, store = viewModel.shortcutStore,
+                    onLookOn = { lookOn = it },
+                    onChange = { draft = it },
+                    search = viewModel::searchGlyphs,
+                )
             }
             // the foot stays put: run it on the laptop to see, then keep it
             Row(
@@ -468,7 +557,9 @@ internal fun LinkShortcutSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 LinkGhostButton("Try it", AppIcons.Play, LinkShortcutTone, enabled = doable) {
-                    session.run(draft)
+                    viewModel.runShortcut(draft, keep = false)
+                    // a two-look shortcut flips, as it does in the row, so the look matches the laptop
+                    if (draft.toggle != null) draft = draft.copy(on = !draft.on)
                     lightUp()
                 }
                 LinkPrimaryButton(if (initial == null) "Add" else "Save", draft.complete, Modifier.weight(1f)) {
@@ -499,14 +590,14 @@ private fun Hero(
     onName: (String) -> Unit,
 ) {
     val icons by store.icons.collectAsState()
-    fun appOf(x: LinkShortcut) = if (x.kind == LinkShortcutKind.APP) apps?.firstOrNull { it.id == x.app } else null
+    fun appOf(x: LinkShortcut) = x.lead?.takeIf { it.kind == LinkShortcutKind.APP }?.let { l -> apps?.firstOrNull { it.id == l.app } }
     HealthSection(tone = LinkShortcutTone) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(SHORTCUT_W * 1.2f, SHORTCUT_H * 1.2f), contentAlignment = Alignment.Center) {
                 AnimatedContent(
                     targetState = s,
                     // a site's face changes in place as its address is typed (its icon lands when fetched)
-                    contentKey = { listOf(it.kind, it.app, it.key, it.mods) },
+                    contentKey = { listOf(it.lead?.kind, it.lead?.app, it.lead?.key, it.lead?.mods, it.shownGlyph, it.on) },
                     transitionSpec = {
                         (fadeIn(AppMotion.fadeTween()) + scaleIn(AppMotion.Link.press(), initialScale = 0.82f)) togetherWith
                             (fadeOut(AppMotion.fadeTween()) + scaleOut(AppMotion.fadeTween(), targetScale = 0.9f))
@@ -525,7 +616,7 @@ private fun Hero(
             Column(Modifier.weight(1f)) {
                 NameField(s.label, onName)
                 Spacer(Modifier.height(6.dp))
-                WhatItDoes(s, appOf(s)?.name, binds, laptopName)
+                WhatItDoes(s, { id -> apps?.firstOrNull { it.id == id }?.name }, binds, laptopName)
             }
         }
     }
@@ -551,25 +642,35 @@ private fun NameField(value: String, onChange: (String) -> Unit) {
     }
 }
 
-/** "Opens Spotify on t3lluz"; keys as their keycaps, with the laptop's own words for them when it has some. */
+/**
+ * "Opens Spotify on t3lluz", or its steps one after another; a shortcut that only presses keys
+ * shows them as keycaps, with the laptop's own words for them when it has some.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun WhatItDoes(s: LinkShortcut, appName: String?, binds: List<LinkBind>?, laptopName: String) {
-    if (s.kind == LinkShortcutKind.KEYS && s.key.isNotBlank()) {
+private fun WhatItDoes(s: LinkShortcut, appName: (String) -> String?, binds: List<LinkBind>?, laptopName: String) {
+    val only = s.steps.singleOrNull()
+    if (only != null && only.kind == LinkShortcutKind.KEYS && only.key.isNotBlank()) {
         // wraps on a narrow phone: four modifiers and a key are wider than the card there
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Presses", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.align(Alignment.CenterVertically).padding(end = 2.dp))
-            s.mods.forEach { Keycap(LinkKeys.modCap(it), TextSecondary, Modifier.align(Alignment.CenterVertically)) }
-            Keycap(s.cap.ifBlank { LinkKeys.cap(s.key) }, LinkShortcutTone, Modifier.align(Alignment.CenterVertically))
+            only.mods.forEach { Keycap(LinkKeys.modCap(it), TextSecondary, Modifier.align(Alignment.CenterVertically)) }
+            Keycap(only.cap.ifBlank { LinkKeys.cap(only.key) }, LinkShortcutTone, Modifier.align(Alignment.CenterVertically))
         }
-        bindFor(binds, s)?.takeIf { !it.label.equals(s.label.trim(), ignoreCase = true) }?.let { b ->
+        bindFor(binds, only)?.takeIf { !it.label.equals(s.label.trim(), ignoreCase = true) }?.let { b ->
             Text(b.label, color = TextTertiary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
         }
     } else {
         val said = describeShortcut(s, laptopName, appName)
         Text(
             said ?: "Ask the AI, or pick it below",
-            color = if (said == null) TextTertiary else TextSecondary, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            color = if (said == null) TextTertiary else TextSecondary, fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (s.toggle != null) {
+        Text(
+            "Flips to \"${s.toggle.label.ifBlank { s.label }}\" when tapped, and back",
+            color = TextTertiary, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp),
         )
     }
 }
@@ -694,6 +795,8 @@ private fun AskButton(working: Boolean, ready: Boolean, onClick: () -> Unit) {
 @Composable
 private fun AppPicker(apps: List<LinkApp>?, canList: Boolean, laptopName: String, picked: String, onPick: (LinkApp) -> Unit) {
     var find by remember { mutableStateOf("") }
+    // the whole list only until an app is picked, or Change asks for it again
+    var browsing by remember(picked) { mutableStateOf(picked.isBlank()) }
     Column {
         when {
             !canList -> Text("Update tandem on $laptopName to pick from its apps.", color = TextSecondary, fontSize = 14.sp)
@@ -703,6 +806,16 @@ private fun AppPicker(apps: List<LinkApp>?, canList: Boolean, laptopName: String
                 Text("Reading $laptopName's apps", color = TextSecondary, fontSize = 14.sp)
             }
             apps.isEmpty() -> Text("Couldn't read $laptopName's apps.", color = TextSecondary, fontSize = 14.sp)
+            // a step with its app picked shows just that app: the grid would push the rest of the sheet away
+            apps.firstOrNull { it.id == picked }?.takeIf { !browsing } != null -> {
+                val app = apps.first { it.id == picked }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(64.dp)) { AppCell(app, true) { browsing = true } }
+                    Spacer(Modifier.width(12.dp))
+                    Text(app.name, style = HealthDisplay, fontSize = 19.sp, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    PillButton(icon = AppIcons.Edit, label = "Change app", accent = LinkShortcutTone, onClick = { browsing = true })
+                }
+            }
             else -> {
                 LinkField(find, { find = it }, "Find an app", leading = AppIcons.Search)
                 Spacer(Modifier.height(10.dp))
@@ -715,7 +828,7 @@ private fun AppPicker(apps: List<LinkApp>?, canList: Boolean, laptopName: String
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(4),
-                        modifier = Modifier.fillMaxWidth().height(300.dp),
+                        modifier = Modifier.fillMaxWidth().height(264.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -751,7 +864,7 @@ private fun AppCell(app: LinkApp, picked: Boolean, onClick: () -> Unit) {
 private fun hostOf(url: String): String? = runCatching { java.net.URI(url).host }.getOrNull()?.lowercase()
 
 /** The laptop's binding that [s] presses, if it is one. */
-private fun bindFor(binds: List<LinkBind>?, s: LinkShortcut): LinkBind? =
+private fun bindFor(binds: List<LinkBind>?, s: LinkStep): LinkBind? =
     binds?.firstOrNull { it.key == s.key && it.mods.toSet() == s.mods.toSet() }
 
 /**
@@ -762,9 +875,9 @@ private fun bindFor(binds: List<LinkBind>?, s: LinkShortcut): LinkBind? =
 private fun KeysPicker(
     binds: List<LinkBind>?,
     laptopName: String,
-    draft: LinkShortcut,
+    draft: LinkStep,
     pickedBind: String?,
-    onPick: (next: LinkShortcut, name: String, bind: String?) -> Unit,
+    onPick: (next: LinkStep, name: String, bind: String?) -> Unit,
 ) {
     val has = !binds.isNullOrEmpty()
     // a key that isn't one of the laptop's bindings opens on the builder; worked out again once the bindings are here
@@ -823,7 +936,7 @@ private fun BindRow(b: LinkBind, picked: Boolean, onClick: () -> Unit) {
 
 /** Modifiers to hold and a key to press with them. */
 @Composable
-private fun ComboBuilder(draft: LinkShortcut, onChange: (List<String>, String) -> Unit) {
+private fun ComboBuilder(draft: LinkStep, onChange: (List<String>, String) -> Unit) {
     // follows the shortcut when it changes from outside (an AI answer, a binding picked)
     var mods by remember(draft.key, draft.mods) { mutableStateOf(draft.mods) }
     var key by remember(draft.key) { mutableStateOf(draft.key.takeIf { LinkKeys.pressable(it) }.orEmpty()) }
@@ -886,7 +999,7 @@ private fun ComboBuilder(draft: LinkShortcut, onChange: (List<String>, String) -
 }
 
 @Composable
-private fun Chip(text: String, on: Boolean, modifier: Modifier = Modifier, small: Boolean = false, onClick: () -> Unit) {
+internal fun Chip(text: String, on: Boolean, modifier: Modifier = Modifier, small: Boolean = false, onClick: () -> Unit) {
     val fill = animateColorAsState(if (on) LinkShortcutTone.copy(alpha = 0.3f) else Well, AppMotion.colorTween(), label = "chip")
     Box(
         modifier.pressable(text, onClick).height(if (small) 36.dp else 44.dp).clip(RoundedCornerShape(14.dp)).drawBehind { drawRect(fill.value) }.padding(horizontal = 13.dp),

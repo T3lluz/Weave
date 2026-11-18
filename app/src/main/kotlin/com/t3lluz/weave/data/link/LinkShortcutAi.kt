@@ -15,17 +15,20 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * "Workspace 3", "open youtube.com", "close the window": one small shortcut out of a few words.
- * The AI is shown the laptop's own bindings and apps, so it picks a real one before making up
- * keys, and it answers with one shortcut in JSON ([parseShortcutAnswer] checks it) and a
- * sentence about it. A follow-up changes the shortcut it made ("make it workspace 4"). Anything
- * bigger than one key, one app, one page or a line of text it turns down, with asks that come close.
+ * "Workspace 3", "deafen me on Discord", "open youtube.com": a shortcut out of a few words. The AI
+ * is shown the laptop's own bindings and apps, so it picks real ones before making up keys. It
+ * answers with the shortcut in JSON ([parseShortcutAnswer] checks it): its steps, in order (bring
+ * Discord to the front, wait, press Ctrl + Shift + D), an icon from Iconify in a fitting colour,
+ * and for something that flips on and off, a second look. A follow-up changes what it made
+ * ("make it workspace 4"). The icons it names are fetched here; one that doesn't exist is
+ * looked up by its search words instead.
  */
 @Singleton
 class LinkShortcutAi @Inject constructor(
     private val httpClient: OkHttpClient,
     private val settings: SettingsRepository,
     private val credentials: AiCredentialResolver,
+    private val store: LinkShortcutStore,
 ) {
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -47,7 +50,7 @@ class LinkShortcutAi @Inject constructor(
     ): ShortcutAnswer {
         val provider = settings.getAiProvider()
         if (!credentials.hasCredentials(provider)) return ShortcutAnswer.Refused("Pick an AI first.")
-        val timeout = 40_000L
+        val timeout = 75_000L
         val live = AtomicBoolean(true)
         fun tell(line: String) { if (live.get()) onProgress(line) }
         val binds = catalog?.binds?.size ?: 0
@@ -66,7 +69,7 @@ class LinkShortcutAi @Inject constructor(
                     prompt = shortcutPrompt(ask, catalog, laptop, current, turns),
                     temperature = 0.1,
                     // room for a model that thinks inside the same budget (Gemini 2.5)
-                    maxOutputTokens = 1200,
+                    maxOutputTokens = 2400,
                     jsonMode = true,
                 ),
                 onEvent = { e ->
@@ -100,7 +103,15 @@ class LinkShortcutAi @Inject constructor(
             call.cancel()
             return ShortcutAnswer.Refused(failure ?: "The AI didn't answer. Try again, or make it by hand below.")
         }
-        return parseShortcutAnswer(answer, catalog)
+        val parsed = parseShortcutAnswer(answer, catalog)
+        if (parsed !is ShortcutAnswer.Made) return parsed
+        // the pictures it named, made real: fetched once, or found by their search words
+        val made = parsed.shortcut
+        if (made.glyph == null && parsed.iconQuery.isBlank() && made.toggle == null) return parsed
+        tell("Fetching its icons")
+        val glyph = store.resolveGlyph(made.glyph, parsed.iconQuery)
+        val toggle = made.toggle?.let { t -> t.copy(glyph = store.resolveGlyph(t.glyph, parsed.toggleQuery) ?: glyph) }
+        return parsed.copy(shortcut = made.copy(glyph = glyph, toggle = toggle))
     }
 }
 
@@ -112,20 +123,29 @@ internal fun shortcutPrompt(
     current: LinkShortcut? = null,
     turns: List<ShortcutTurn> = emptyList(),
 ): String = buildString {
-    appendLine("You make one button for a phone that remote-controls a Linux laptop called \"$laptop\" (Hyprland, Omarchy).")
-    appendLine("A button does exactly one of these:")
-    appendLine("""- {"kind":"keys","key":KEY,"mods":[MODS],"label":NAME,"reply":REPLY}: presses one key combination.""")
-    // a laptop that can't list its apps gets no app buttons: the AI would have to guess an id
-    if (!catalog?.apps.isNullOrEmpty()) {
-        appendLine("""- {"kind":"app","app":APP_ID,"label":NAME,"reply":REPLY}: opens one of the laptop's apps (ids below).""")
+    val hasApps = !catalog?.apps.isNullOrEmpty()
+    appendLine("You make one shortcut button for a phone that remote-controls a Linux laptop called \"$laptop\" (Hyprland, Omarchy).")
+    appendLine("A tap runs the button's steps in order. Answer with one JSON object:")
+    appendLine("""{"label":NAME,"steps":[STEP,...],"icon":ICON,"toggle":{"label":NAME,"icon":ICON},"reply":REPLY}""")
+    appendLine()
+    appendLine("STEP is one of:")
+    appendLine("""- {"kind":"keys","key":KEY,"mods":[MODS]}: presses one key combination on whatever window has focus.""")
+    // a laptop that can't list its apps gets no app steps: the AI would have to guess an id
+    if (hasApps) {
+        appendLine("""- {"kind":"app","app":APP_ID}: opens one of the laptop's apps (ids below). When it is already open, this brings its window to the front and focuses it, for apps that keep one window (Discord, Vesktop, Spotify, Slack, Steam, Obsidian, browsers).""")
     }
-    appendLine("""- {"kind":"site","url":"https://…","label":NAME,"reply":REPLY}: opens one web page in the laptop's browser.""")
-    appendLine("""- {"kind":"text","text":WORDS,"label":NAME,"reply":REPLY}: types some words, on one line.""")
+    appendLine("""- {"kind":"site","url":"https://…"}: opens one web page in the laptop's browser.""")
+    appendLine("""- {"kind":"text","text":WORDS}: types some words, on one line.""")
+    appendLine("""- {"kind":"wait","ms":MS}: waits 100 to 5000 ms before the next step.""")
     appendLine("MODS are any of ctrl, alt, shift, super. KEY is a lowercase letter or digit, or one of: ${LinkKeys.SPECIAL.joinToString(", ")}.")
-    appendLine("NAME is what the button says: at most 14 characters, plain words, like \"Workspace 3\" or \"YouTube\".")
-    appendLine("REPLY is one short sentence to the person, at most 110 characters: what the button does, naming the laptop's binding when it uses one, like \"Presses Super + 3, $laptop's Switch to workspace 3.\"")
-    appendLine("Prefer one of the laptop's own bindings below when one does what is asked: use its key and mods exactly.")
-    appendLine("""If the ask needs more than one step, or is not something a button can do, answer {"error":"<one short sentence why>","suggestions":[up to 3 short asks a button can do that come close]}.""")
+    appendLine("Use as few steps as do the job, at most ${LinkShortcut.STEPS_MAX}. Keys meant for one app (Discord's Ctrl+Shift+D to deafen) need that app focused first: an app step, then the keys (the phone waits for the app to come to the front by itself; add a wait only when the app is slow to start, about 2000 ms). Prefer one of the laptop's own bindings below when one does what is asked: use its key and mods exactly.")
+    appendLine("Use the app's real default shortcuts (Discord and Vesktop: ctrl+shift+m mutes the mic, ctrl+shift+d deafens; Spotify: space plays or pauses).")
+    appendLine()
+    appendLine("NAME is what the button says: at most 14 characters, plain words, like \"Deafen\" or \"Workspace 3\".")
+    appendLine("""ICON is {"id":ICON_ID,"query":WORDS,"color":"#RRGGBB"}: ICON_ID is an Iconify icon id from mdi, material-symbols, lucide, tabler or simple-icons (brand logos), like "mdi:headphones", "mdi:headphones-off", "mdi:microphone-off", "lucide:monitor", "simple-icons:youtube". WORDS are two or three search words for a fitting icon, used if the id doesn't exist. Pick an icon that shows what the button does (Discord's deafen is headphones; deafened is headphones struck out), not just the app's logo, unless the button only opens the app or page. color is the app's brand colour when the button is about one app (Discord #5865F2, Spotify #1DB954, YouTube #FF0000), else leave it out.""")
+    appendLine("""toggle: only for a button that flips something on and off (mute and unmute, deafen and undeafen, play and pause, fullscreen, do not disturb). "icon" and "label" are its look while off (what a tap will do), toggle's are its look while on (deafened: "Undeafen" with headphones struck out, often in red #ED4245). Leave toggle out for everything else.""")
+    appendLine("REPLY is one short sentence to the person, at most 110 characters: what the button does, naming the laptop's binding when it uses one.")
+    appendLine("""If the ask is not something a button can do, answer {"error":"<one short sentence why>","suggestions":[up to 3 short asks a button can do that come close]}.""")
     appendLine("Answer with the JSON object only.")
     val binds = catalog?.binds.orEmpty()
     if (binds.isNotEmpty()) {
@@ -147,7 +167,7 @@ internal fun shortcutPrompt(
     if (current != null && current.complete) {
         appendLine()
         appendLine("The button so far: ${buttonJson(current)}")
-        appendLine("The ask may change it (\"make it workspace 4\", \"call it Music\"): keep what the ask doesn't change, and answer with the whole button.")
+        appendLine("The ask may change it (\"make it workspace 4\", \"call it Music\", \"focus Discord first\"): keep what the ask doesn't change, and answer with the whole button.")
     }
     appendLine()
     append("The ask: ").append(ask.trim().take(300))
@@ -155,12 +175,10 @@ internal fun shortcutPrompt(
 
 /** The button the sheet holds, in the answer's own shape. */
 private fun buttonJson(s: LinkShortcut): String {
-    val o = org.json.JSONObject().put("kind", s.kind.id).put("label", s.label)
-    when (s.kind) {
-        LinkShortcutKind.KEYS -> o.put("key", s.key).put("mods", org.json.JSONArray(s.mods))
-        LinkShortcutKind.APP -> o.put("app", s.app)
-        LinkShortcutKind.SITE -> o.put("url", s.url)
-        LinkShortcutKind.TEXT -> o.put("text", s.text)
-    }
+    fun icon(g: LinkGlyph?) = g?.let { org.json.JSONObject().put("id", it.id).apply { it.color?.let { c -> put("color", "#%06X".format(c and 0xFFFFFF)) } } }
+    val o = org.json.JSONObject().put("label", s.label)
+        .put("steps", org.json.JSONArray(s.steps.map { st -> st.toJson().apply { remove("cap") } }))
+    icon(s.glyph)?.let { o.put("icon", it) }
+    s.toggle?.let { t -> o.put("toggle", org.json.JSONObject().put("label", t.label).apply { icon(t.glyph)?.let { put("icon", it) } }) }
     return o.toString()
 }

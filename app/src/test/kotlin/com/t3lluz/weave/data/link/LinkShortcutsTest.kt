@@ -18,18 +18,25 @@ class LinkShortcutsTest {
 
     private fun made(raw: String) = (parseShortcutAnswer(raw, catalog) as ShortcutAnswer.Made).shortcut
 
+    /** A one-step shortcut's step, for the tests written when a shortcut was one action. */
+    private fun step(raw: String) = made(raw).steps.single()
+
+    private fun keys(label: String, key: String, mods: List<String> = emptyList(), cap: String = "") =
+        LinkShortcut(label = label, steps = listOf(LinkStep(LinkShortcutKind.KEYS, key = key, mods = mods, cap = cap)))
+
     @Test
     fun aBindingTheAiPicksKeepsTheLaptopsKeycap() {
-        val s = made("""{"kind":"keys","key":"3","mods":["super"],"label":"Workspace 3"}""")
+        val made = made("""{"kind":"keys","key":"3","mods":["super"],"label":"Workspace 3"}""")
+        val s = made.steps.single()
         assertEquals(LinkShortcutKind.KEYS, s.kind)
         assertEquals("3", s.key)
         assertEquals(listOf("super"), s.mods)
-        assertEquals("Workspace 3", s.label)
+        assertEquals("Workspace 3", made.label)
     }
 
     @Test
     fun aKeyNamedTheWayOtherSystemsNameItIsTheLaptops() {
-        val s = made("""{"kind":"keys","key":"T","mods":["Control","shift"],"label":"Reopen tab"}""")
+        val s = step("""{"kind":"keys","key":"T","mods":["Control","shift"],"label":"Reopen tab"}""")
         assertEquals("t", s.key)
         assertEquals(listOf("ctrl", "shift"), s.mods)
         assertEquals("T", s.cap)
@@ -39,7 +46,7 @@ class LinkShortcutsTest {
     fun aRawCodeTheLaptopListedCanBePressed() {
         val s = made("""{"kind":"keys","key":"#193","mods":["super","shift"]}""")
         assertEquals("Omarchy menu", s.label)
-        assertEquals(listOf("super", "shift"), s.mods)
+        assertEquals(listOf("super", "shift"), s.steps.single().mods)
     }
 
     @Test
@@ -58,28 +65,28 @@ class LinkShortcutsTest {
 
     @Test
     fun anAppMustBeOneTheLaptopHasFoundByIdOrName() {
-        assertEquals("firefox", made("""{"kind":"app","app":"firefox"}""").app)
-        assertEquals("org.gnome.Nautilus", made("""{"kind":"app","app":"files","label":"Files"}""").app)
+        assertEquals("firefox", step("""{"kind":"app","app":"firefox"}""").app)
+        assertEquals("org.gnome.Nautilus", step("""{"kind":"app","app":"files","label":"Files"}""").app)
         assertTrue(parseShortcutAnswer("""{"kind":"app","app":"photoshop"}""", catalog) is ShortcutAnswer.Refused)
     }
 
     @Test
     fun aSiteGetsHttpsAndANameFromItsAddress() {
         val s = made("""{"kind":"site","url":"youtube.com"}""")
-        assertEquals("https://youtube.com", s.url)
+        assertEquals("https://youtube.com", s.steps.single().url)
         assertEquals("Youtube", s.label)
     }
 
     @Test
     fun anAnswerWrappedInWordsOrFencesStillReads() {
         val s = made("Sure:\n```json\n{\"kind\":\"text\",\"text\":\"hello@example.com\",\"label\":\"Email\"}\n```")
-        assertEquals("hello@example.com", s.text)
+        assertEquals("hello@example.com", s.steps.single().text)
     }
 
     @Test
     fun wordsFromTheAiAreOneLineSoNothingRunsInATerminal() {
         val s = made("""{"kind":"text","text":"rm -rf x\nls","label":"Oops"}""")
-        assertEquals("rm -rf x ls", s.text)
+        assertEquals("rm -rf x ls", s.steps.single().text)
     }
 
     @Test
@@ -107,10 +114,12 @@ class LinkShortcutsTest {
 
     @Test
     fun aShortcutSurvivesBeingKeptAndAnIncompleteOneDoesNot() {
-        val s = LinkShortcut(kind = LinkShortcutKind.KEYS, label = "Close", key = "w", mods = listOf("super"), cap = "W")
+        val s = keys("Close", "w", listOf("super"), "W")
         assertEquals(s, LinkShortcut.fromJson(s.toJson()))
-        assertNull(LinkShortcut.fromJson(LinkShortcut(kind = LinkShortcutKind.SITE, label = "x", url = "ftp://x").toJson()))
-        assertFalse(LinkShortcut(kind = LinkShortcutKind.APP, label = "").complete)
+        assertNull(LinkShortcut.fromJson(LinkShortcut(label = "x", steps = listOf(LinkStep(LinkShortcutKind.SITE, url = "ftp://x"))).toJson()))
+        assertFalse(LinkShortcut(label = "", steps = listOf(LinkStep(LinkShortcutKind.APP))).complete)
+        // waits alone do nothing
+        assertFalse(LinkShortcut(label = "x", steps = listOf(LinkStep(LinkShortcutKind.WAIT, ms = 500))).complete)
     }
 
     @Test
@@ -172,24 +181,36 @@ class LinkShortcutsTest {
 
     @Test
     fun whatAShortcutDoesInWords() {
-        assertEquals("Opens Firefox on t3lluz", describeShortcut(LinkShortcut(kind = LinkShortcutKind.APP, label = "Web", app = "firefox"), "t3lluz", "Firefox"))
-        assertEquals("Opens youtube.com in t3lluz's browser", describeShortcut(LinkShortcut(kind = LinkShortcutKind.SITE, label = "", url = "https://www.youtube.com/feed"), "t3lluz"))
-        assertEquals("Presses Super + Shift + W on t3lluz", describeShortcut(LinkShortcut(kind = LinkShortcutKind.KEYS, label = "", key = "w", mods = listOf("super", "shift"), cap = "W"), "t3lluz"))
-        assertEquals("Types \"hi there\" on t3lluz", describeShortcut(LinkShortcut(kind = LinkShortcutKind.TEXT, label = "", text = "hi\nthere"), "t3lluz"))
+        fun one(st: LinkStep) = LinkShortcut(label = "", steps = listOf(st))
+        val names = { id: String -> if (id == "firefox") "Firefox" else null }
+        assertEquals("Opens Firefox on t3lluz", describeShortcut(one(LinkStep(LinkShortcutKind.APP, app = "firefox")), "t3lluz", names))
+        assertEquals("Opens youtube.com in t3lluz's browser", describeShortcut(one(LinkStep(LinkShortcutKind.SITE, url = "https://www.youtube.com/feed")), "t3lluz"))
+        assertEquals("Presses Super + Shift + W on t3lluz", describeShortcut(one(LinkStep(LinkShortcutKind.KEYS, key = "w", mods = listOf("super", "shift"), cap = "W")), "t3lluz"))
+        assertEquals("Types \"hi there\" on t3lluz", describeShortcut(one(LinkStep(LinkShortcutKind.TEXT, text = "hi\nthere")), "t3lluz"))
         // nothing picked yet
-        assertNull(describeShortcut(LinkShortcut(kind = LinkShortcutKind.KEYS, label = ""), "t3lluz"))
-        assertNull(describeShortcut(LinkShortcut(kind = LinkShortcutKind.SITE, label = "", url = ""), "t3lluz"))
+        assertNull(describeShortcut(one(LinkStep(LinkShortcutKind.KEYS)), "t3lluz"))
+        assertNull(describeShortcut(one(LinkStep(LinkShortcutKind.SITE, url = "")), "t3lluz"))
+        // several steps read one after another, the wait left out
+        val deafen = LinkShortcut(
+            label = "Deafen",
+            steps = listOf(
+                LinkStep(LinkShortcutKind.APP, app = "firefox"), LinkStep(LinkShortcutKind.WAIT, ms = 600),
+                LinkStep(LinkShortcutKind.KEYS, key = "d", mods = listOf("ctrl", "shift"), cap = "D"),
+            ),
+        )
+        assertEquals("Focuses Firefox, then presses Ctrl + Shift + D", describeShortcut(deafen, "t3lluz", names))
     }
 
     @Test
     fun aFollowUpChangesTheShortcutItMade() {
-        val current = LinkShortcut(kind = LinkShortcutKind.KEYS, label = "Workspace 3", key = "3", mods = listOf("super"), cap = "3")
+        val current = keys("Workspace 3", "3", listOf("super"), "3")
         val prompt = shortcutPrompt("make it 4", catalog, "t3lluz", current, listOf(ShortcutTurn("workspace 3", "Presses Super + 3.")))
         val sofar = org.json.JSONObject(prompt.lines().first { it.startsWith("The button so far: ") }.removePrefix("The button so far: "))
-        assertEquals("keys", sofar.getString("kind"))
-        assertEquals("3", sofar.getString("key"))
-        assertEquals("super", sofar.getJSONArray("mods").getString(0))
-        assertFalse(sofar.has("app"))
+        val st = sofar.getJSONArray("steps").getJSONObject(0)
+        assertEquals("keys", st.getString("kind"))
+        assertEquals("3", st.getString("key"))
+        assertEquals("super", st.getJSONArray("mods").getString(0))
+        assertFalse(st.has("app"))
         assertTrue(prompt.contains("- \"workspace 3\" → Presses Super + 3."))
         assertTrue(prompt.trimEnd().endsWith("The ask: make it 4"))
         // a first ask has neither
@@ -203,5 +224,74 @@ class LinkShortcutsTest {
         assertTrue(shortcutPrompt("open spotify", catalog, "t3lluz").contains("\"kind\":\"app\""))
         assertFalse(shortcutPrompt("open spotify", LinkCatalog(emptyList(), catalog.binds), "t3lluz").contains("\"kind\":\"app\""))
         assertFalse(shortcutPrompt("open spotify", null, "t3lluz").contains("\"kind\":\"app\""))
+    }
+
+    @Test
+    fun aShortcutCanFocusAnAppWaitAndPressItsKeys() {
+        val answer = parseShortcutAnswer(
+            """{"label":"Deafen","steps":[{"kind":"app","app":"Firefox"},{"kind":"wait","ms":99999},{"kind":"keys","key":"d","mods":["ctrl","shift"]}],
+               "icon":{"id":"mdi:headphones","query":"headphones","color":"#5865F2"},
+               "toggle":{"label":"Undeafen","icon":{"id":"mdi:headphones-off","color":"#ED4245"}},"reply":"Deafens you."}""",
+            catalog,
+        ) as ShortcutAnswer.Made
+        val s = answer.shortcut
+        assertEquals(listOf(LinkShortcutKind.APP, LinkShortcutKind.WAIT, LinkShortcutKind.KEYS), s.steps.map { it.kind })
+        // the app found by its name; a wait the AI made too long is cut down
+        assertEquals("firefox", s.steps[0].app)
+        assertEquals(5000, s.steps[1].ms)
+        assertEquals(LinkGlyph("mdi:headphones", 0xFF5865F2), s.glyph)
+        assertEquals(LinkToggle("Undeafen", LinkGlyph("mdi:headphones-off", 0xFFED4245)), s.toggle)
+        assertEquals("headphones", answer.iconQuery)
+        assertEquals("firefox", s.appId)
+        // off, it shows its usual look; on, the toggle's
+        assertEquals("Deafen", s.shownLabel)
+        assertEquals("Undeafen", s.copy(on = true).shownLabel)
+        assertEquals("mdi:headphones-off", s.copy(on = true).shownGlyph?.id)
+        assertEquals(s, LinkShortcut.fromJson(s.toJson()))
+    }
+
+    @Test
+    fun oneBadStepTurnsTheWholeShortcutDown() {
+        val raw = """{"label":"x","steps":[{"kind":"app","app":"photoshop"},{"kind":"keys","key":"s","mods":["ctrl"]}]}"""
+        assertTrue(parseShortcutAnswer(raw, catalog) is ShortcutAnswer.Refused)
+        val many = (1..9).joinToString(",") { """{"kind":"keys","key":"a"}""" }
+        assertTrue(parseShortcutAnswer("""{"label":"x","steps":[$many]}""", catalog) is ShortcutAnswer.Refused)
+    }
+
+    @Test
+    fun anIconIdThatCantBeOneIsDroppedButItsWordsAreKept() {
+        val answer = parseShortcutAnswer(
+            """{"label":"Mic","steps":[{"kind":"keys","key":"m","mods":["ctrl","shift"]}],"icon":{"id":"Headphones Off!","query":"mic off"}}""",
+            catalog,
+        ) as ShortcutAnswer.Made
+        assertNull(answer.shortcut.glyph)
+        assertEquals("mic off", answer.iconQuery)
+        assertNull(LinkGlyph.color("blue"))
+        assertEquals(0xFF5865F2, LinkGlyph.color("#5865f2"))
+    }
+
+    @Test
+    fun aShortcutKeptBeforeStepsLoadsAsOneStep() {
+        val old = org.json.JSONObject("""{"id":"a1","kind":"keys","label":"Close","app":"","url":"","key":"w","mods":["super"],"cap":"W","text":""}""")
+        val s = LinkShortcut.fromJson(old)!!
+        assertEquals("a1", s.id)
+        assertEquals(listOf(LinkStep(LinkShortcutKind.KEYS, key = "w", mods = listOf("super"), cap = "W")), s.steps)
+        assertNull(s.glyph)
+        assertNull(s.toggle)
+    }
+
+    @Test
+    fun theAiIsToldHowToFocusAnAppBeforeItsKeys() {
+        val prompt = shortcutPrompt("deafen me on discord", catalog, "t3lluz")
+        assertTrue(prompt.contains("\"steps\""))
+        assertTrue(prompt.contains("\"kind\":\"wait\""))
+        assertTrue(prompt.contains("toggle"))
+        assertTrue(prompt.contains("mdi:headphones-off"))
+    }
+
+    @Test
+    fun theProgressLineFollowsTheSteps() {
+        assertEquals("Step 2: picking the keys", shortcutProgress("""{"label":"Deafen","steps":[{"kind":"app","app":"x"},{"kind":"keys","""").let { it?.replace("Step 2: Picking", "Step 2: picking") })
+        assertEquals("Picking an icon", shortcutProgress("""{"steps":[{"kind":"keys","key":"d"}],"icon":{"id":"md"""))
     }
 }

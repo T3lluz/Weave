@@ -663,12 +663,39 @@ class LinkSession @Inject constructor(
     }
 
     /** Does what [s] says on the laptop. */
-    fun run(s: LinkShortcut) {
+    /** Does one step on the laptop at once. A wait does nothing here: [runSteps] waits it out. */
+    fun run(s: LinkStep) {
         when (s.kind) {
             LinkShortcutKind.APP -> sendJson(JSONObject().put("t", "launch").put("app", s.app))
             LinkShortcutKind.SITE -> openOnLaptop(s.url)
             LinkShortcutKind.KEYS -> key(s.key, s.mods)
             LinkShortcutKind.TEXT -> text(s.text)
+            LinkShortcutKind.WAIT -> Unit
+        }
+    }
+
+    /**
+     * A shortcut's steps, in order. A wait waits. A step after an app or a page waits until that
+     * has had [SETTLE_MS] or [PAGE_SETTLE_MS] to come to the front, waits in between counting
+     * toward it: Vesktop takes 0.8 to 1 s to take focus on t3lluz, and keys sent before that land
+     * in whatever window had it. Other steps get a beat between them, so two key presses never
+     * run together.
+     */
+    suspend fun runSteps(steps: List<LinkStep>) {
+        var readyAt = 0L
+        for (step in steps) {
+            if (step.kind == LinkShortcutKind.WAIT) {
+                kotlinx.coroutines.delay(step.ms.toLong())
+                continue
+            }
+            val now = android.os.SystemClock.uptimeMillis()
+            if (readyAt > now) kotlinx.coroutines.delay(readyAt - now)
+            run(step)
+            readyAt = android.os.SystemClock.uptimeMillis() + when (step.kind) {
+                LinkShortcutKind.APP -> SETTLE_MS
+                LinkShortcutKind.SITE -> PAGE_SETTLE_MS
+                else -> BEAT_MS
+            }
         }
     }
 
@@ -686,6 +713,12 @@ class LinkSession @Inject constructor(
     private fun round4(v: Float) = Math.round(v * 10000f) / 10000.0
 
     companion object {
+        /** How long an app gets to come to the front before the next step. */
+        const val SETTLE_MS = 1_300L
+        /** How long a page gets to open before the next step. */
+        const val PAGE_SETTLE_MS = 900L
+        /** Between two steps that need no waiting. */
+        const val BEAT_MS = 60L
         private const val READ_TIMEOUT_MS = 12_000
         private const val PENDING_TIMEOUT_MS = 150_000
         const val RECONNECT_GRACE_MS = 20_000L

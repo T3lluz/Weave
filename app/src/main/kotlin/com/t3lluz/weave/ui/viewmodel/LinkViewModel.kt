@@ -115,26 +115,43 @@ class LinkViewModel @Inject constructor(
     val shortcuts = shortcutStore.shortcuts
 
     /**
-     * Keeps a shortcut, and its picture: an app's icon as the laptop sent it, a site's fetched
-     * once in the background (the tile shows a globe until it lands). Only its own kind's
-     * fields are kept.
+     * Keeps a shortcut, and its pictures: each app's icon as the laptop sent it, each site's
+     * fetched once in the background (the tile shows a globe until it lands), and its own
+     * glyphs. Each step keeps only its own kind's fields.
      */
     fun saveShortcut(s: LinkShortcut) {
-        val clean = when (s.kind) {
-            LinkShortcutKind.APP -> s.copy(url = "", key = "", mods = emptyList(), cap = "", text = "")
-            LinkShortcutKind.SITE -> s.copy(app = "", key = "", mods = emptyList(), cap = "", text = "")
-            LinkShortcutKind.KEYS -> s.copy(app = "", url = "", text = "")
-            LinkShortcutKind.TEXT -> s.copy(app = "", url = "", key = "", mods = emptyList(), cap = "")
-        }.let { it.copy(label = it.label.trim()) }
+        val clean = s.copy(label = s.label.trim(), steps = s.steps.map { it.clean() }, toggle = s.toggle?.let { it.copy(label = it.label.trim()) })
         if (!clean.complete) return
         shortcutStore.save(clean)
         viewModelScope.launch {
-            when (clean.kind) {
-                LinkShortcutKind.APP -> keepAppIconWhenHere(clean.app)
-                LinkShortcutKind.SITE -> nameAfterSite(clean, shortcutStore.fetchSiteIcon(clean.url))
-                else -> Unit
+            clean.steps.forEach { step ->
+                when (step.kind) {
+                    LinkShortcutKind.APP -> launch { keepAppIconWhenHere(step.app) }
+                    LinkShortcutKind.SITE -> {
+                        val own = shortcutStore.fetchSiteIcon(step.url)
+                        if (step == clean.lead) nameAfterSite(clean, own)
+                    }
+                    else -> Unit
+                }
             }
+            listOfNotNull(clean.glyph, clean.toggle?.glyph).forEach { shortcutStore.fetchGlyph(it.id) }
         }
+    }
+
+    /**
+     * Runs a shortcut's steps on the laptop. One with two looks flips to the other at once, so the
+     * tile answers the tap; [keep] is false for one that isn't saved yet (Try it in the sheet).
+     */
+    fun runShortcut(s: LinkShortcut, keep: Boolean = true) {
+        viewModelScope.launch { session.runSteps(s.steps) }
+        if (keep && s.toggle != null) {
+            shortcutStore.shortcuts.value.firstOrNull { it.id == s.id }?.let { shortcutStore.save(it.copy(on = !it.on)) }
+        }
+    }
+
+    /** Puts a two-look shortcut in the look that matches the laptop, without running it. */
+    fun setShortcutOn(s: LinkShortcut, on: Boolean) {
+        shortcutStore.shortcuts.value.firstOrNull { it.id == s.id }?.let { shortcutStore.save(it.copy(on = on)) }
     }
 
     fun removeShortcut(id: String) = shortcutStore.remove(id)
@@ -161,7 +178,8 @@ class LinkViewModel @Inject constructor(
     private fun nameAfterSite(s: LinkShortcut, own: String?) {
         if (own == null || own == s.label) return
         val now = shortcutStore.shortcuts.value.firstOrNull { it.id == s.id } ?: return
-        if (now.label == siteName(now.url)) shortcutStore.save(now.copy(label = own.take(LABEL_MAX)))
+        val url = now.lead?.takeIf { it.kind == LinkShortcutKind.SITE }?.url ?: return
+        if (now.label == siteName(url)) shortcutStore.save(now.copy(label = own.take(LABEL_MAX)))
     }
 
     /** Whether an AI is set up to make shortcuts from words. */
@@ -177,12 +195,19 @@ class LinkViewModel @Inject constructor(
     fun fillMissingIcons() {
         if (iconsFilled) return
         iconsFilled = true
-        val missing = shortcutStore.shortcuts.value.filter {
+        val all = shortcutStore.shortcuts.value
+        val steps = all.flatMap { it.steps }
+        val missing = steps.filter {
             (it.kind == LinkShortcutKind.SITE || it.kind == LinkShortcutKind.APP) && shortcutStore.iconFile(it) == null && !shortcutStore.noIcon(it)
-        }
-        if (missing.isEmpty()) return
+        }.distinct()
+        val glyphs = all.flatMap { listOfNotNull(it.glyph, it.toggle?.glyph) }.map { it.id }.distinct().filter { shortcutStore.glyphFile(it) == null }
+        if (missing.isEmpty() && glyphs.isEmpty()) return
         viewModelScope.launch {
-            missing.filter { it.kind == LinkShortcutKind.SITE }.forEach { nameAfterSite(it, shortcutStore.fetchSiteIcon(it.url)) }
+            glyphs.forEach { launch { shortcutStore.fetchGlyph(it) } }
+            missing.filter { it.kind == LinkShortcutKind.SITE }.forEach { step ->
+                val own = shortcutStore.fetchSiteIcon(step.url)
+                all.firstOrNull { it.lead == step }?.let { nameAfterSite(it, own) }
+            }
             val apps = missing.filter { it.kind == LinkShortcutKind.APP }
             if (apps.isNotEmpty()) {
                 session.requestCatalog()
@@ -191,6 +216,9 @@ class LinkViewModel @Inject constructor(
             }
         }
     }
+
+    /** Icons from Iconify for some words, for the sheet's icon search. */
+    suspend fun searchGlyphs(query: String): List<String> = shortcutStore.searchGlyphs(query)
 
     /**
      * A shortcut out of a few words. The laptop's apps and bindings go with the ask; if they
