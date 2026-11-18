@@ -408,6 +408,12 @@ class LinkSession @Inject constructor(
                 }
                 sendJson(JSONObject().put("t", "adb").put("ips", JSONArray(ownAddresses())))
                 if (syncsClipboard) send("""{"t":"clip_sync","on":true}""")
+                localPointer.laptopGain(m.optDouble("gain", Double.NaN).takeIf { !it.isNaN() }?.toFloat())
+                // what wakes this laptop from sleep, kept for when it is asleep and can't say
+                m.optJSONObject("wake")?.let { w ->
+                    val mac = w.optString("mac")
+                    if (mac.isNotBlank()) prefs.update { it.copy(wakeMac = mac, wakeBroadcast = w.optString("brd").takeIf { b -> b != "null" }.orEmpty()) }
+                }
                 ping()
             }
             "video" -> {

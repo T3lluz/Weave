@@ -357,6 +357,20 @@ class LinkKeyView(context: Context) : View(context) {
 
         override fun finishComposingText(): Boolean = super.finishComposingText().also { sync() }
 
+        /**
+         * The keyboard moved the cursor (a slide on the space bar, say): the laptop's moves with it,
+         * as arrow keys, and the copy starts afresh there, since only typing at its end is mirrored.
+         */
+        override fun setSelection(start: Int, end: Int): Boolean {
+            val content = editable ?: return false
+            val at = android.text.Selection.getSelectionEnd(content)
+            val to = end.coerceIn(0, content.length)
+            if (to == at) return super.setSelection(start, end)
+            repeat(kotlin.math.abs(to - at).coerceAtMost(200)) { onKey(if (to < at) "left" else "right") }
+            restart()
+            return true
+        }
+
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
             // nothing of ours to take back: what is before the cursor on the laptop goes
             if (editable.isNullOrEmpty()) {
@@ -387,7 +401,22 @@ class LinkKeyView(context: Context) : View(context) {
             return true
         }
 
+        /**
+         * Tells the keyboard where the text and cursor are now, as a real text field does after each
+         * edit: keyboards built on Android's own (Pixelboard, AOSP) follow the cursor by it, and
+         * without it their suggestions and corrections go wrong.
+         */
+        private fun report() {
+            val content = editable ?: return
+            imm?.updateSelection(
+                this@LinkKeyView,
+                android.text.Selection.getSelectionStart(content), android.text.Selection.getSelectionEnd(content),
+                getComposingSpanStart(content), getComposingSpanEnd(content),
+            )
+        }
+
         private fun sync() {
+            report()
             val now = editable?.toString().orEmpty()
             if (now == sent) return
             // a line break typed into the copy is Enter on the laptop, and a fresh copy after it

@@ -37,7 +37,8 @@ class LocalPointerTest {
         p.report(0.5f, 0.5f, 1_000)
         p.sent(100f, 0f, 1_010)
         p.sent(100f, 0f, 1_100)
-        // lands at 1_120, taken about 20 + 17 ms before: it covers the first move, not the second
+        // lands at 1_120: the moves had to get there and back (40 ms) and be looked for (about 23 ms),
+        // so it counts the first move, not the second
         p.report(0.6f, 0.5f, 1_120)
         assertEquals(0.7f, p.x, 1e-4f)
         // once the finger stops, the pointer sits exactly where the laptop says
@@ -72,5 +73,27 @@ class LocalPointerTest {
         p.jump(0.25f, 0.75f)
         assertTrue(p.shown)
         assertEquals(0.25f, p.x, 1e-4f)
+    }
+
+    @Test
+    fun aGainTheLaptopStatesIsTakenAsItIs() {
+        val p = pointer()
+        p.laptopGain(1.44f)
+        p.report(0.5f, 0.5f, 1_000)
+        p.sent(100f, 0f, 1_010)
+        assertEquals(0.5f + 144f / 1000f, p.x, 1e-4f)
+        // a report that moved further than the gain says doesn't change it
+        p.report(0.9f, 0.5f, 1_200)
+        assertEquals(1.44f, p.gain, 1e-4f)
+    }
+
+    @Test
+    fun aMoveIsOnlyCountedOnceTheLaptopCanHaveSeenIt() {
+        val p = pointer()
+        p.report(0.5f, 0.5f, 1_000)
+        p.sent(50f, 0f, 1_000)
+        // back 30 ms later: too soon to include the move, so it is still drawn on top
+        p.report(0.5f, 0.5f, 1_030)
+        assertEquals(0.55f, p.x, 1e-4f)
     }
 }

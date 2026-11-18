@@ -1,5 +1,9 @@
 package com.t3lluz.weave.ui.screens.link
 
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedVisibility
 import com.t3lluz.weave.data.link.LinkStep
 import com.t3lluz.weave.data.link.LinkGlyph
 import coil.request.ImageRequest
@@ -495,8 +499,33 @@ internal fun ShortcutRow(
                 val target = geo.slot(shown.size)
                 val pos = remember { Animatable(target, Offset.VectorConverter) }
                 LaunchedEffect(target) { pos.animateTo(target, AppMotion.Link.reorder()) }
-                Box(Modifier.onShelf { pos.value }) {
-                    AddTile(arranging) { if (arranging) onArranging(false) else onAdd() }
+                // while arranging its place stays (the last tile can scroll out from under the pinned Done) but it shows nothing
+                Box(Modifier.onShelf { pos.value }.graphicsLayer { alpha = if (arranging) 0f else 1f }) {
+                    AddTile(false) { if (!arranging) onAdd() }
+                }
+            }
+        }
+        // Done stays in reach while arranging, whatever the shelf is scrolled to: pinned to its far
+        // end (the grid's last corner), the shelf fading out under it
+        AnimatedVisibility(
+            visible = arranging,
+            enter = fadeIn(AppMotion.fadeTween()) + scaleIn(AppMotion.Link.press(), initialScale = 0.85f),
+            exit = fadeOut(AppMotion.fadeTween()),
+            modifier = Modifier.align(if (grid) Alignment.BottomEnd else Alignment.TopEnd),
+        ) {
+            val w = with(density) { tileW.value.toDp() }
+            val h = with(density) { tileH.value.toDp() }
+            Row(
+                Modifier.padding(top = if (grid) 0.dp else TOP_ROOM, end = EDGE_PAD),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(if (grid) 0.dp else 28.dp, h)
+                        .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color.Transparent, Background))),
+                )
+                Box(Modifier.size(w, h).background(Background)) {
+                    AddTile(true) { onArranging(false) }
                 }
             }
         }

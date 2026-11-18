@@ -172,11 +172,19 @@ internal fun LinkSheet(
                     // the laptop leaves its own pointer out of the picture, or puts it back, from the next connection
                     session.reconnect()
                 }
+                if (config.localPointer) {
+                    Text("Pointer size", color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+                    Segmented(
+                        listOf(0.8f to "Small", 1f to "Usual", 1.3f to "Large", 1.7f to "Huge"),
+                        picked = config.pointerSize, tone = LinkHandsTone,
+                    ) { size -> viewModel.change { it.copy(pointerSize = size) } }
+                    Spacer(Modifier.height(6.dp))
+                }
                 ToggleRow("Scroll like a phone", "The page moves with your fingers", config.naturalScroll, LinkHandsTone) {
                     viewModel.change { it.copy(naturalScroll = !it.naturalScroll) }
                 }
-                ToggleRow("Autocorrect", "The phone's keyboard corrects and suggests words, never in a terminal", config.autocorrect, LinkHandsTone) {
-                    viewModel.change { it.copy(autocorrect = !it.autocorrect) }
+                ToggleRow("Phone keyboard as usual", "Suggestions, autocorrect and swiping; plain keys in a terminal", config.nativeKeyboard, LinkHandsTone) {
+                    viewModel.change { it.copy(nativeKeyboard = !it.nativeKeyboard) }
                 }
                 ToggleRow("Keyboard rises by itself", "When a click lands where you type", config.autoKeyboard, LinkHandsTone) {
                     viewModel.change { it.copy(autoKeyboard = !it.autoKeyboard) }

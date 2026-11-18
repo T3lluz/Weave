@@ -37,3 +37,5 @@ Grab the APK from [Releases](https://github.com/T3lluz/Weave/releases/latest). E
 JDK 17, Android SDK 36, Android 8.0 and up.
 
 Weave started as the Laptop screen in [DailyDash](https://github.com/T3lluz/DailyDash), copied out on 2026-11-18.
+
+The pointer is the macOS27-GoldenGate cursor theme's arrow, as installed on the laptop.

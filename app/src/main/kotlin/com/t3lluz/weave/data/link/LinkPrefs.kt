@@ -36,8 +36,13 @@ data class LinkConfig(
     val showShortcuts: Boolean = true,
     /** The phone draws the pointer itself, where the finger puts it, and the laptop's is left out of the picture. */
     val localPointer: Boolean = true,
-    /** The phone's keyboard corrects and suggests words as it does in any app; never in a terminal. */
-    val autocorrect: Boolean = false,
+    /** The phone's keyboard works as in any app: suggestions, autocorrect, swiping. Plain keys in a terminal. */
+    val nativeKeyboard: Boolean = true,
+    /** The drawn pointer's size, 1 being the laptop's own. */
+    val pointerSize: Float = 1f,
+    /** The picked laptop's network card and its network's broadcast address, to wake it from sleep. */
+    val wakeMac: String = "",
+    val wakeBroadcast: String = "",
     /** What is copied on either side is there to paste on the other. */
     val clipSync: Boolean = false,
 )
@@ -80,7 +85,10 @@ class LinkPrefs @Inject constructor(
             putBoolean("showPicture", next.showPicture)
             putBoolean("showShortcuts", next.showShortcuts)
             putBoolean("localPointer", next.localPointer)
-            putBoolean("autocorrect", next.autocorrect)
+            putBoolean("nativeKeyboard", next.nativeKeyboard)
+            putFloat("pointerSize", next.pointerSize)
+            putString("wakeMac", next.wakeMac)
+            putString("wakeBroadcast", next.wakeBroadcast)
             putBoolean("clipSync", next.clipSync)
         }
     }
@@ -100,7 +108,10 @@ class LinkPrefs @Inject constructor(
             showPicture = prefs.getBoolean("showPicture", d.showPicture),
             showShortcuts = prefs.getBoolean("showShortcuts", d.showShortcuts),
             localPointer = prefs.getBoolean("localPointer", d.localPointer),
-            autocorrect = prefs.getBoolean("autocorrect", d.autocorrect),
+            nativeKeyboard = prefs.getBoolean("nativeKeyboard", d.nativeKeyboard),
+            pointerSize = prefs.getFloat("pointerSize", d.pointerSize),
+            wakeMac = prefs.getString("wakeMac", d.wakeMac).orEmpty(),
+            wakeBroadcast = prefs.getString("wakeBroadcast", d.wakeBroadcast).orEmpty(),
             clipSync = prefs.getBoolean("clipSync", d.clipSync),
         )
     }

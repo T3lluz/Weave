@@ -118,6 +118,7 @@ internal fun LinkFinder(
     onRetry: () -> Unit,
     onForget: () -> Unit,
     onSettings: () -> Unit,
+    onWake: () -> Unit = {},
 ) {
     var typing by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
@@ -181,6 +182,7 @@ internal fun LinkFinder(
                     pickedName, online = null, busy = false, state = state, picked = true,
                     onClick = onRetry, onRetry = onRetry, onForget = onForget,
                     modifier = Modifier.riseIn(index++, rise),
+                    onWake = onWake.takeIf { config.wakeMac.isNotBlank() },
                 )
             }
             laptops.hosts.forEach { laptop ->
@@ -190,6 +192,7 @@ internal fun LinkFinder(
                     state = if (mine) state else LinkState(), picked = mine,
                     onClick = { onPick(laptop) }, onRetry = onRetry, onForget = onForget,
                     modifier = Modifier.riseIn(index++, rise),
+                    onWake = onWake.takeIf { mine && config.wakeMac.isNotBlank() },
                 )
             }
             if (!laptops.loaded && !picked) {
@@ -275,6 +278,8 @@ private fun LaptopRoom(
     onRetry: () -> Unit,
     onForget: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Wakes it from sleep, for the laptop whose network card the phone knows; null for the rest. */
+    onWake: (() -> Unit)? = null,
 ) {
     val haptics = rememberHaptics()
     val context = LocalContext.current
@@ -341,9 +346,15 @@ private fun LaptopRoom(
                 color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
             )
         }
+        // asleep, and the phone knows how to wake it
+        if (onWake != null && online == false && !stuck && !trying && !waiting) {
+            Spacer(Modifier.height(14.dp))
+            PillButton(icon = AppIcons.Power, label = "Wake it", accent = LinkScreenTone, emphasized = true, onClick = onWake)
+        }
         if (stuck) {
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onWake != null) PillButton(icon = AppIcons.Power, label = "Wake", accent = LinkScreenTone, emphasized = true, onClick = onWake)
                 if (state.tailscaleOff) {
                     PillButton(icon = AppIcons.ExternalLink, label = "Open Tailscale", accent = LinkScreenTone, emphasized = true, onClick = {
                         val launch = context.packageManager.getLaunchIntentForPackage(TAILSCALE)

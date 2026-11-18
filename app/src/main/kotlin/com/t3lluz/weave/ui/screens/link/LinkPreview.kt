@@ -97,6 +97,8 @@ internal fun LinkPreview(
     onRetry: () -> Unit = { session.retryVideo() },
     /** Draw the pointer here, ahead of the picture, which leaves the laptop's own out ([LocalPointer]). */
     drawPointer: Boolean = false,
+    /** The drawn pointer's size, 1 being the laptop's own at the picture's scale. */
+    pointerSize: Float = 1f,
 ) {
     val video = session.video
     val size by video.size.collectAsState()
@@ -249,14 +251,15 @@ internal fun LinkPreview(
         // the pointer, drawn where the finger has put it; the picture catches up under it
         if (drawPointer) {
             val monW = session.state.collectAsState().value.shownMonitor?.let { m -> (m.layoutWidth.takeIf { it > 0 } ?: m.width).toFloat() } ?: 1920f
+            val arrow = rememberArrow()
             Canvas(Modifier.fillMaxSize()) {
                 pointerTick.longValue
                 if (!pointer.shown || !live || waiting || still != null) return@Canvas
                 val at = geometry.toBox(pointer.x, pointer.y)
-                // a laptop pointer is about 24 of its pixels tall: that, at the picture's scale, kept easy to see
+                // the laptop's arrow is 48 of its pixels tall: that, at the picture's scale, kept easy to see
                 val scale = geometry.fitW * geometry.zoomState.floatValue / monW
-                val tall = (24f * scale).coerceIn(15.dp.toPx(), 26.dp.toPx())
-                drawPointer(at, tall)
+                val tall = (ARROW_LAPTOP_PX * scale).coerceIn(20.dp.toPx(), 34.dp.toPx()) * pointerSize
+                if (arrow != null) drawArrow(arrow, at, tall) else drawPointer(at, tall * 0.55f)
             }
         }
 
@@ -343,5 +346,36 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPointer(tip: an
     drawPath(
         arrow, androidx.compose.ui.graphics.Color.Black,
         style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.2f * k, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+    )
+}
+
+/** How tall the arrow is on the laptop, in its pixels: the theme's size-24 arrow is 34 by 48. */
+private const val ARROW_LAPTOP_PX = 48f
+
+/**
+ * The pointer's picture: the macOS arrow from the laptop's own cursor theme (macOS27-GoldenGate),
+ * 136 by 194 with its tip at 24, 24, drawn at its size-96 resolution so it stays sharp.
+ */
+private class Arrow(val image: androidx.compose.ui.graphics.ImageBitmap, val hotX: Float, val hotY: Float)
+
+@androidx.compose.runtime.Composable
+private fun rememberArrow(): Arrow? {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) {
+        runCatching {
+            context.assets.open("cursors/arrow.png").use { android.graphics.BitmapFactory.decodeStream(it) }
+        }.getOrNull()?.let { Arrow(it.asImageBitmap(), 24f, 24f) }
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArrow(arrow: Arrow, tip: androidx.compose.ui.geometry.Offset, tall: Float) {
+    val k = tall / arrow.image.height
+    val w = (arrow.image.width * k).toInt().coerceAtLeast(1)
+    val h = (arrow.image.height * k).toInt().coerceAtLeast(1)
+    drawImage(
+        arrow.image,
+        dstOffset = androidx.compose.ui.unit.IntOffset((tip.x - arrow.hotX * k).toInt(), (tip.y - arrow.hotY * k).toInt()),
+        dstSize = androidx.compose.ui.unit.IntSize(w, h),
+        filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
     )
 }

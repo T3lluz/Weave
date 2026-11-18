@@ -101,6 +101,21 @@ class LinkViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Wakes the picked laptop with a magic packet, then tries it again once it has had time to
+     * come up (and back onto the tailnet).
+     */
+    fun wake() {
+        val cfg = prefs.config.value
+        if (cfg.wakeMac.isBlank()) return
+        viewModelScope.launch {
+            com.t3lluz.weave.data.link.WakeOnLan.send(cfg.wakeMac, cfg.wakeBroadcast)
+            kotlinx.coroutines.delay(WAKE_WAIT_MS)
+            findLaptops()
+            session.reconnect()
+        }
+    }
+
     fun start() = session.start()
     fun stop() = session.stop()
 
@@ -246,4 +261,9 @@ class LinkViewModel @Inject constructor(
      * the shortcut will look like. The picture is kept for the shortcut once it is saved.
      */
     suspend fun previewSite(url: String): String? = shortcutStore.fetchSiteIcon(url)
+
+    private companion object {
+        /** A laptop waking from sleep is back on Wi-Fi and the tailnet in about this long. */
+        const val WAKE_WAIT_MS = 9_000L
+    }
 }

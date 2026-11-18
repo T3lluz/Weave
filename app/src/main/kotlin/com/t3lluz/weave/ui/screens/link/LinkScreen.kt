@@ -354,6 +354,10 @@ fun LinkScreen(
                     onPick = viewModel::connectTo, onAddress = viewModel::connectTo,
                     onRetry = { session.reconnect() }, onForget = viewModel::disconnect,
                     onSettings = onSettings,
+                    onWake = {
+                        viewModel.wake()
+                        toast = "Waking $laptopName. Give it a few seconds."
+                    },
                 )
                 landscape -> Sideways(
                     viewModel = viewModel, state = state, config = config, geometry = geometry, hazeState = hazeState,
@@ -376,7 +380,7 @@ fun LinkScreen(
             update = { view ->
                 view.onText = ::typed
                 view.onKey = ::pressed
-                view.autocorrect = config.autocorrect && !inTerminal
+                view.autocorrect = config.nativeKeyboard && !inTerminal
             },
             modifier = Modifier.size(1.dp).alpha(0f),
         )
@@ -521,6 +525,7 @@ private fun Upright(
                         zoom = viewModel.zoom, fill = config.fillPreview,
                         error = state.videoError, note = if (reconnecting) "Reconnecting" else null,
                         drawPointer = config.localPointer && LinkSession.LOCAL_CURSOR in state.caps,
+                        pointerSize = config.pointerSize,
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.Black)
@@ -647,6 +652,7 @@ private fun Sideways(
             session = session, geometry = geometry, zoom = 1f, fill = false, error = state.videoError,
             note = if (state.status == LinkStatus.Reconnecting) "Reconnecting" else null,
             drawPointer = config.localPointer && LinkSession.LOCAL_CURSOR in state.caps,
+            pointerSize = config.pointerSize,
             modifier = Modifier
                 .fillMaxSize()
                 .hazeSource(hazeState)

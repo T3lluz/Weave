@@ -7,12 +7,13 @@ import kotlin.math.hypot
  * laptop's last word on where it is, plus the moves sent since that it can't have counted yet.
  *
  * The laptop reports the pointer about 30 times a second while it moves ([report], the "cur"
- * message: 0..1 of the shown monitor), and each report is roughly half a round trip and half a
- * polling interval old when it lands. Moves sent before then are already in it; the ones after
- * are added on top, scaled by [gain], the laptop's pixels per unit of the phone's moves. That
- * gain isn't fixed (Hyprland puts its own pointer acceleration on tandem's mouse), so it is
- * learnt from how far the pointer really went for the moves that report covers. When the finger
- * stops, every move is counted and the pointer sits exactly where the laptop says.
+ * message: 0..1 of the shown monitor). A report can only count moves that had reached the laptop
+ * before it looked: those sent more than a round trip and half a polling interval before it
+ * lands. The ones after are added on top, scaled by [gain], the laptop's pixels per unit of the
+ * phone's moves. tandem says what that is when Hyprland adds no acceleration (the flat profile:
+ * 1 + sensitivity), and the prediction is exact; otherwise it is learnt from how far the pointer
+ * really went. When the finger stops, every move is counted and the pointer sits exactly where
+ * the laptop says.
  *
  * Moves come from the UI thread and reports from the link's reading thread; [x] and [y] are read
  * once a frame by the overlay.
@@ -30,9 +31,19 @@ class LocalPointer {
     @Volatile var version = 0L
         private set
 
-    /** Laptop pixels per unit of the phone's moves, learnt as it goes. */
+    /** Laptop pixels per unit of the phone's moves: the laptop's own word, or learnt as it goes. */
     var gain = 1f
         private set
+
+    /** The laptop said what the gain is: nothing to learn. */
+    private var exact = false
+
+    /** What the laptop says its gain is; null when it can't say (its pointer accelerates). */
+    @Synchronized
+    fun laptopGain(g: Float?) {
+        exact = g != null && g > 0f
+        if (exact) gain = g!!.coerceIn(GAIN_MIN, GAIN_MAX)
+    }
 
     private class Move(val at: Long, val dx: Float, val dy: Float)
 
@@ -83,7 +94,8 @@ class LocalPointer {
     /** Where the laptop says the pointer is, 0..1 of [name], landing at [now]. */
     @Synchronized
     fun report(rx: Float, ry: Float, now: Long) {
-        val age = (rttMs / 2 + POLL_AGE_MS).coerceIn(10, 300)
+        // the moves had to reach the laptop, the laptop had to look, and the report had to come back
+        val age = (rttMs + POLL_AGE_MS + INJECT_MS).coerceIn(15, 400)
         val cutoff = now - age
         // the moves this report already counts
         var sx = 0f
@@ -93,7 +105,7 @@ class LocalPointer {
             sx += m.dx
             sy += m.dy
         }
-        if (known) learn(rx - reportX, ry - reportY, sx, sy, rx, ry)
+        if (known && !exact) learn(rx - reportX, ry - reportY, sx, sy, rx, ry)
         known = true
         reportX = rx
         reportY = ry
@@ -135,6 +147,8 @@ class LocalPointer {
     companion object {
         /** tandem looks at the pointer every 33 ms: a report is half of that old on average when sent. */
         const val POLL_AGE_MS = 17
+        /** From a move landing to Hyprland having moved the pointer. */
+        const val INJECT_MS = 6
         const val GAIN_MIN = 0.2f
         const val GAIN_MAX = 10f
     }
