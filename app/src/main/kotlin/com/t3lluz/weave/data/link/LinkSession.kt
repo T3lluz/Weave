@@ -454,7 +454,7 @@ class LinkSession @Inject constructor(
             "cur" -> {
                 cursorX = m.optDouble("x", 0.5).toFloat()
                 cursorY = m.optDouble("y", 0.5).toFloat()
-                localPointer.report(cursorX, cursorY, android.os.SystemClock.uptimeMillis())
+                localPointer.report(cursorX, cursorY, android.os.SystemClock.uptimeMillis(), if (m.has("seq")) m.optLong("seq") else null)
             }
             "ptr" -> _pointer.value = LinkPointer(m.optDouble("x").toFloat(), m.optDouble("y").toFloat())
             "monitors" -> m.optJSONArray("monitors")?.let { a ->
@@ -591,9 +591,13 @@ class LinkSession @Inject constructor(
         send("""{"t":"ping"${if (rtt != null) ""","rtt":$rtt""" else ""},"net":"${network()}"}""")
     }
 
+    /** Numbers the moves, so the laptop's pointer reports can say which they already show. */
+    private val moveSeq = java.util.concurrent.atomic.AtomicLong(0)
+
     fun move(dx: Float, dy: Float) {
-        send("""{"t":"m","dx":${round2(dx)},"dy":${round2(dy)}}""")
-        if (drawsPointer) localPointer.sent(dx, dy, android.os.SystemClock.uptimeMillis())
+        val seq = moveSeq.incrementAndGet()
+        send("""{"t":"m","dx":${round2(dx)},"dy":${round2(dy)},"s":$seq}""")
+        if (drawsPointer) localPointer.sent(dx, dy, android.os.SystemClock.uptimeMillis(), seq)
     }
     fun scroll(dx: Float, dy: Float) = send("""{"t":"scroll","dx":${round2(dx)},"dy":${round2(dy)}}""")
     fun click(button: String = "left", count: Int = 1) = send("""{"t":"click","btn":"$button","n":$count}""")

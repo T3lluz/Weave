@@ -96,4 +96,20 @@ class LocalPointerTest {
         p.report(0.5f, 0.5f, 1_030)
         assertEquals(0.55f, p.x, 1e-4f)
     }
+
+    @Test
+    fun aNumberedReportDropsExactlyTheMovesItShowsHoweverLateItIs() {
+        val p = pointer()
+        p.laptopGain(1f)
+        p.report(0.5f, 0.5f, 1_000, shows = 0)
+        p.sent(100f, 0f, 1_010, seq = 1)
+        p.sent(100f, 0f, 1_020, seq = 2)
+        p.sent(100f, 0f, 1_030, seq = 3)
+        // a report that waited 400 ms behind a keyframe still shows only moves 1 and 2
+        p.report(0.7f, 0.5f, 1_430, shows = 2)
+        assertEquals(0.8f, p.x, 1e-4f)
+        // and the one for move 3 leaves nothing on top
+        p.report(0.8f, 0.5f, 1_460, shows = 3)
+        assertEquals(0.8f, p.x, 1e-4f)
+    }
 }

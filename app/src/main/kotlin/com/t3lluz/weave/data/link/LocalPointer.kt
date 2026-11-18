@@ -7,10 +7,13 @@ import kotlin.math.hypot
  * laptop's last word on where it is, plus the moves sent since that it can't have counted yet.
  *
  * The laptop reports the pointer about 30 times a second while it moves ([report], the "cur"
- * message: 0..1 of the shown monitor). A report can only count moves that had reached the laptop
- * before it looked: those sent more than a round trip and half a polling interval before it
- * lands. The ones after are added on top, scaled by [gain], the laptop's pixels per unit of the
- * phone's moves. tandem says what that is when Hyprland adds no acceleration (the flat profile:
+ * message: 0..1 of the shown monitor), naming the last of the phone's numbered moves it already
+ * shows. Those are dropped, so there is no guessing, however long the report waited behind a
+ * frame of the picture. A tandem that doesn't number them leaves a guess: the moves sent more
+ * than a round trip and half a polling interval before the report landed.
+ *
+ * The moves still outstanding are added on top, scaled by [gain], the laptop's pixels per unit
+ * of the phone's moves. tandem says what that is when Hyprland adds no acceleration (the flat profile:
  * 1 + sensitivity), and the prediction is exact; otherwise it is learnt from how far the pointer
  * really went. When the finger stops, every move is counted and the pointer sits exactly where
  * the laptop says.
@@ -45,7 +48,7 @@ class LocalPointer {
         if (exact) gain = g!!.coerceIn(GAIN_MIN, GAIN_MAX)
     }
 
-    private class Move(val at: Long, val dx: Float, val dy: Float)
+    private class Move(val at: Long, val dx: Float, val dy: Float, val seq: Long)
 
     private val pending = ArrayDeque<Move>()
     private var known = false
@@ -70,13 +73,13 @@ class LocalPointer {
         publish(0.5f, 0.5f, false)
     }
 
-    /** A move sent to the laptop, in the phone's units. */
+    /** A move sent to the laptop, in the phone's units, with its number. */
     @Synchronized
-    fun sent(dx: Float, dy: Float, now: Long) {
+    fun sent(dx: Float, dy: Float, now: Long, seq: Long = 0) {
         if (!known) return
-        pending.addLast(Move(now, dx, dy))
-        // nothing older than a second can still be outstanding
-        while (pending.size > 1 && now - pending.first().at > 1_000) pending.removeFirst()
+        pending.addLast(Move(now, dx, dy, seq))
+        // nothing older than two seconds can still be outstanding
+        while (pending.size > 1 && now - pending.first().at > 2_000) pending.removeFirst()
         predict()
     }
 
@@ -91,16 +94,19 @@ class LocalPointer {
         publish(px, py, true)
     }
 
-    /** Where the laptop says the pointer is, 0..1 of [name], landing at [now]. */
+    /**
+     * Where the laptop says the pointer is, 0..1 of the shown monitor, landing at [now]; [shows] is
+     * the number of the last move it already includes, when the laptop says.
+     */
     @Synchronized
-    fun report(rx: Float, ry: Float, now: Long) {
+    fun report(rx: Float, ry: Float, now: Long, shows: Long? = null) {
         // the moves had to reach the laptop, the laptop had to look, and the report had to come back
         val age = (rttMs + POLL_AGE_MS + INJECT_MS).coerceIn(15, 400)
         val cutoff = now - age
         // the moves this report already counts
         var sx = 0f
         var sy = 0f
-        while (pending.isNotEmpty() && pending.first().at <= cutoff) {
+        while (pending.isNotEmpty() && (if (shows != null) pending.first().seq <= shows else pending.first().at <= cutoff)) {
             val m = pending.removeFirst()
             sx += m.dx
             sy += m.dy
