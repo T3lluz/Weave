@@ -261,15 +261,27 @@ class AppUpdateRepository @Inject constructor(
         parseReleaseList(body)
     }
 
+    /**
+     * GitHub's answer for [url], sent with the ETag of the last one. An unchanged answer comes
+     * back 304 and GitHub doesn't count it against the 60 an hour an address gets without a
+     * login, which DailyDash on the same network spends too; the kept copy stands in for it.
+     */
     private fun fetchJson(url: String): String? {
+        val key = "etag_" + url.hashCode().toUInt().toString(16)
+        val kept = File(context.cacheDir, "github/$key.json")
+        val etag = prefs.getString(key, null)?.takeIf { kept.isFile }
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "Weave/${BuildConfig.VERSION_NAME}")
+            .apply { if (etag != null) header("If-None-Match", etag) }
             .get()
             .build()
 
         apiClient.newCall(request).execute().use { response ->
+            if (response.code == 304 && etag != null) {
+                return runCatching { kept.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
+            }
             when (response.code) {
                 404 -> {
                     Log.i(TAG, "GitHub releases 404 for $url")
@@ -284,7 +296,15 @@ class AppUpdateRepository @Inject constructor(
             if (!response.isSuccessful) {
                 throw IOException("GitHub releases HTTP ${response.code}")
             }
-            return response.body?.string()?.takeIf { it.isNotBlank() }
+            val body = response.body?.string()?.takeIf { it.isNotBlank() } ?: return null
+            response.header("ETag")?.let { tag ->
+                runCatching {
+                    kept.parentFile?.mkdirs()
+                    kept.writeText(body)
+                    prefs.edit { putString(key, tag) }
+                }
+            }
+            return body
         }
     }
 
