@@ -11,6 +11,7 @@ The laptop side is tandem for now, the daemon DailyDash's laptop screen talks to
 - The phone's keyboard types on the laptop. It comes up by itself when a click lands in a text field.
 - Shortcuts over the trackpad, one step or several: bring an app to the front, open a page, press keys, type, wait. Describe one to Claude ("deafen me on Discord") and it plans the steps and picks icons, or build it by hand. A shortcut can flip between two looks, like Deafen and Undeafen.
 - Fold the screen away to make the phone one big trackpad, and fold the shortcuts away to give the pad their room.
+- Full screen, the controls and your shortcuts sit in one glass panel in the corner. It folds to a single button by itself after a few seconds.
 - The laptop's sound on the phone, the phone's sound on the laptop, media keys, the clipboard both ways, and lock.
 
 ## Finding the laptop

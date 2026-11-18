@@ -77,6 +77,7 @@ import com.t3lluz.weave.data.link.LinkShortcut
 import com.t3lluz.weave.data.link.monitorUnder
 import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
+import com.t3lluz.weave.ui.components.SquircleShape
 import com.t3lluz.weave.ui.components.chromeGlass
 import com.t3lluz.weave.ui.screens.ai.MenuRow
 import com.t3lluz.weave.ui.theme.AppIcons
@@ -613,6 +614,9 @@ private fun Upright(
     }
 }
 
+/** The full-screen panel's glass: a squircle folded to its handle, the same corners unfolded. */
+private val PanelShape = SquircleShape(26.dp)
+
 // ── on its side: the laptop's screen fills the phone ────────────────────────────
 
 @Composable
@@ -632,6 +636,7 @@ private fun Sideways(
 ) {
     val session = viewModel.session
     val haptics = rememberHaptics()
+    val shortcuts by viewModel.shortcuts.collectAsState()
     var open by remember { mutableStateOf(true) }
     // every touch of a control starts the wait again
     var used by remember { mutableIntStateOf(0) }
@@ -665,40 +670,45 @@ private fun Sideways(
                 ),
         )
 
-        // The controls: one glass panel that unfolds from its handle.
-        val shape = RoundedCornerShape(28.dp)
-        Row(
+        // The controls and the shortcuts: one glass panel that unfolds from its handle.
+        PanelStack(
             Modifier
                 .align(Alignment.TopEnd)
                 .padding(12.dp)
-                .chromeGlass(hazeState, shape)
-                .animateContentSize(AppMotion.Link.panel())
+                .chromeGlass(hazeState, PanelShape)
+                // it grows from its handle: the handle stays put and in view, and the rest is uncovered from it
+                .animateContentSize(AppMotion.Link.panel(), alignment = Alignment.TopEnd)
                 .padding(5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (open) {
-                val touch = viewModel.touchMode
-                // with no picture to touch, the whole phone is the trackpad
-                if (config.showPicture || !state.canHidePicture) {
-                    PanelButton(0, if (touch) AppIcons.Scan else AppIcons.MousePointer, if (touch) "Touch" else "Trackpad", LinkHandsTone, on = touch) {
-                        used++
-                        viewModel.touchMode = !touch
+            controls = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (open) {
+                        val touch = viewModel.touchMode
+                        // with no picture to touch, the whole phone is the trackpad
+                        if (config.showPicture || !state.canHidePicture) {
+                            PanelButton(0, if (touch) AppIcons.Scan else AppIcons.MousePointer, if (touch) "Touch" else "Trackpad", LinkHandsTone, on = touch) {
+                                used++
+                                viewModel.touchMode = !touch
+                            }
+                        }
+                        PanelButton(1, AppIcons.Keyboard, "Keyboard", LinkHandsTone, on = imeVisible) { used++; onKeyboard() }
+                        PanelButton(2, if (state.laptopSound) AppIcons.LaptopSound else AppIcons.LaptopSoundOff, "Sound", LinkSoundTone, on = state.laptopSound) {
+                            used++
+                            actions.laptopSound(!state.laptopSound)
+                        }
+                        PanelDivider()
+                        PanelButton(3, AppIcons.Play, "Play") { used++; session.media("play") }
+                        PanelButton(4, AppIcons.VolumeLow, "Quieter") { used++; session.media("voldown") }
+                        PanelButton(5, AppIcons.Volume, "Louder") { used++; session.media("volup") }
+                        PanelDivider()
+                        PanelButton(6, AppIcons.Minimize, "Exit") { onUpright() }
                     }
+                    PanelHandle(open) { open = !open }
                 }
-                PanelButton(1, AppIcons.Keyboard, "Keyboard", LinkHandsTone, on = imeVisible) { used++; onKeyboard() }
-                PanelButton(2, if (state.laptopSound) AppIcons.LaptopSound else AppIcons.LaptopSoundOff, "Sound", LinkSoundTone, on = state.laptopSound) {
-                    used++
-                    actions.laptopSound(!state.laptopSound)
-                }
-                PanelDivider()
-                PanelButton(3, AppIcons.Play, "Play") { used++; session.media("play") }
-                PanelButton(4, AppIcons.VolumeLow, "Quieter") { used++; session.media("voldown") }
-                PanelButton(5, AppIcons.Volume, "Louder") { used++; session.media("volup") }
-                PanelDivider()
-                PanelButton(6, AppIcons.Minimize, "Exit") { onUpright() }
-            }
-            PanelHandle(open) { open = !open }
-        }
+            },
+            shelf = if (open && shortcuts.isNotEmpty()) {
+                { PanelShortcuts(shortcuts, viewModel.shortcutStore, onUsed = { used++ }) { viewModel.runShortcut(it) } }
+            } else null,
+        )
 
         AnimatedVisibility(
             visible = imeVisible,

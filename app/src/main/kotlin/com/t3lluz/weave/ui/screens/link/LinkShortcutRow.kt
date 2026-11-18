@@ -563,15 +563,16 @@ internal class TileFx {
  * One shortcut: its picture over its name. A tap lights it for a moment and its picture hops.
  * One with two looks shows the one it is in, lit in its colour while on; one of several steps
  * says how many on its corner. [picture] stands in for the one on disk (an app's icon not saved
- * yet); a shortcut with no key yet shows what it will be.
+ * yet); a shortcut with no key yet shows what it will be. On [glass] (the full-screen panel) its
+ * colour is a wash the glass shows through, not a fill.
  */
 @Composable
-internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null) {
+internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null, glass: Boolean = false) {
     val glyph = s.shownGlyph
     val lit = s.toggle != null && s.on
     // the tile wears its icon's colour: the glyph's own, else the main colour of its app's or site's icon
     val tone = rememberTileTone(s, store, icons)
-    val fill = lerp(Background, tone, 0.13f)
+    val fill = if (glass) tone.copy(alpha = 0.15f) else lerp(Background, tone, 0.13f)
     val actions = s.steps.count { it.kind != LinkShortcutKind.WAIT }
     Box(Modifier.fillMaxSize()) {
         Column(

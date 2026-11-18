@@ -221,17 +221,6 @@ internal fun PanelDivider() {
     Box(Modifier.padding(horizontal = 4.dp).size(width = 1.dp, height = 26.dp).background(Color.White.copy(alpha = 0.1f)))
 }
 
-/** Folds the panel away to this one button, and opens it again. */
-@Composable
-internal fun PanelHandle(open: Boolean, onClick: () -> Unit) {
-    val turn = animateFloatAsState(if (open) 0f else 1f, AppMotion.Link.panel(), label = "handle")
-    Box(Modifier.pressable(if (open) "Hide the controls" else "Show the controls", onClick).size(46.dp), contentAlignment = Alignment.Center) {
-        // one of the two carries the name, so a screen reader (and a test) can find the handle
-        Icon(AppIcons.Close, if (open) "Hide the controls" else "Show the controls", tint = TextPrimary, modifier = Modifier.size(18.dp).graphicsLayer { alpha = 1f - turn.value; rotationZ = -90f * turn.value })
-        Icon(AppIcons.Ellipsis, null, tint = TextPrimary, modifier = Modifier.size(20.dp).graphicsLayer { alpha = turn.value; rotationZ = 90f * (1f - turn.value) })
-    }
-}
-
 /** A line that says what just happened, dropping in under the status bar. */
 @Composable
 internal fun LinkToast(message: String?, hazeState: HazeState?, modifier: Modifier = Modifier) {
