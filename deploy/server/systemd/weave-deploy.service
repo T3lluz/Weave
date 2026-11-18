@@ -1,0 +1,8 @@
+[Unit]
+Description=Publish Weave's master branch to t3lluz.com/weave
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/docker/weave/repo/deploy/server/update.sh
+TimeoutStartSec=5min

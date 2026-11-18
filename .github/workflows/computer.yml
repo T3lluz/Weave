@@ -20,5 +20,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Tests
+        if: runner.os != 'Windows'
         working-directory: computer
         run: python -m unittest discover -s tests
+      # the rest of the tests are of the Linux side and need Linux to load
+      - name: Tests of the Windows side and of pairing
+        if: runner.os == 'Windows'
+        working-directory: computer
+        run: python -m unittest tests.test_windows tests.test_pairing

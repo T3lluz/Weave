@@ -1,5 +1,6 @@
 """The parts of the Windows side that are plain arithmetic and text: they run anywhere."""
 
+import sys
 import unittest
 
 from weave.win import capture, catalog, inject, screen
@@ -58,6 +59,7 @@ class Screens(unittest.TestCase):
 
 
 class Keys(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "the Linux side's key table loads only on Linux")
     def test_every_named_key_the_linux_side_knows_has_a_windows_key_or_is_laptop_only(self):
         from weave.inject import KEYS
         laptop_only = {"brightdown", "brightup", "kbdlight", "kbddown", "kbdup", "micmute"}
