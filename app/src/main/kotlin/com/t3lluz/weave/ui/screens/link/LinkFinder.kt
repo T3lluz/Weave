@@ -119,6 +119,7 @@ internal fun LinkFinder(
     onForget: () -> Unit,
     onSettings: () -> Unit,
     onWake: () -> Unit = {},
+    onScan: () -> Unit = {},
 ) {
     var typing by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
@@ -231,7 +232,7 @@ internal fun LinkFinder(
                             .background(roomColor(LinkScreenTone))
                             .padding(horizontal = 18.dp, vertical = 14.dp),
                         decorationBox = { inner ->
-                            if (address.isEmpty()) Text("Tailscale name or 100.x.y.z", color = TextTertiary, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
+                            if (address.isEmpty()) Text("192.168.x.y or a Tailscale name", color = TextTertiary, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
                             inner()
                         },
                     )
@@ -240,8 +241,11 @@ internal fun LinkFinder(
                 }
             }
             if (!typing) {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    PillButton(icon = AppIcons.Edit, label = "Connect by address", accent = TextSecondary, onClick = { typing = true })
+                // the code `weave pair` shows on the computer, or its address by hand
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    PillButton(icon = AppIcons.Scan, label = "Scan a code", accent = LinkScreenTone, emphasized = true, onClick = onScan)
+                    Spacer(Modifier.width(10.dp))
+                    PillButton(icon = AppIcons.Edit, label = "By address", accent = TextSecondary, onClick = { typing = true })
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -258,11 +262,11 @@ private fun headlineFor(state: LinkState, picked: Boolean, pickedName: String, l
         picked && state.tailscaleOff && state.status == LinkStatus.Failed -> "Tailscale is off" to "Turn it on and $pickedName is a tap away."
         picked && state.status == LinkStatus.Failed -> "Couldn't reach $pickedName" to null
         picked && state.status == LinkStatus.Denied -> "$pickedName said no" to null
-        !laptops.loaded -> "Looking for laptops" to null
+        !laptops.loaded -> "Looking for computers" to null
         ready.size == 1 -> "${ready[0].name} is ready" to "Tap it to use it from here."
-        ready.size > 1 -> "${ready.size} laptops are ready" to "Tap one to use it from here."
-        laptops.hosts.isNotEmpty() -> "No laptop is on" to "They show up here as soon as they wake."
-        else -> "No laptop yet" to "Run tandem on a laptop. It shows up here by itself."
+        ready.size > 1 -> "${ready.size} computers are ready" to "Tap one to use it from here."
+        laptops.hosts.isNotEmpty() -> "No computer is on" to "They show up here as soon as they wake."
+        else -> "No computer yet" to "Install Weave on your computer (t3lluz.com/weave), run weave pair there, and scan the code it shows."
     }
 }
 

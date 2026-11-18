@@ -28,7 +28,9 @@ import com.t3lluz.weave.ui.screens.settings.SettingsScreen
 import com.t3lluz.weave.ui.screens.settings.UpdatesScreen
 import com.t3lluz.weave.ui.theme.AppMotion
 import com.t3lluz.weave.ui.theme.WeaveTheme
+import com.t3lluz.weave.data.link.parseInvite
 import com.t3lluz.weave.ui.viewmodel.AppUpdateViewModel
+import com.t3lluz.weave.ui.viewmodel.LinkViewModel
 import dagger.hilt.android.AndroidEntryPoint
 
 /** Where the app is: the remote, its settings, Settings → AI, or Settings → Updates. */
@@ -37,12 +39,15 @@ private enum class Place { Remote, Settings, Ai, Updates }
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val updates: AppUpdateViewModel by viewModels()
+    // the remote's own model (the screen gets the same one): a pairing link goes straight to it
+    private val link: LinkViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         updates.startListening()
         consumeUpdateIntent(intent)
+        consumePairIntent(intent)
         // Weave opened on the build it just installed: say what it brought
         updates.handlePostUpdateLaunch(forceFromIntent = consumePostUpdateIntent(intent))
         setContent {
@@ -112,10 +117,18 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeUpdateIntent(intent)
+        consumePairIntent(intent)
         if (consumePostUpdateIntent(intent)) updates.handlePostUpdateLaunch(forceFromIntent = true)
     }
 
     /** The update notification: its tap opens the sheet, its Update action starts the update too. */
+    /** A computer's pairing link (weave://pair?...) opened Weave: connect to it with its code. */
+    private fun consumePairIntent(intent: Intent?) {
+        val invite = parseInvite(intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString) ?: return
+        intent?.data = null   // once: a rotation must not pair again with a code that is spent
+        link.pair(invite)
+    }
+
     private fun consumeUpdateIntent(intent: Intent?) {
         intent ?: return
         val start = intent.getBooleanExtra(AppUpdateNotifier.EXTRA_START_UPDATE, false)

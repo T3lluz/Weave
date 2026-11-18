@@ -116,6 +116,9 @@ dependencies {
     // The background check for a new release (in-app updates)
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 
+    // Scanning a computer's pairing code: Google's scanner, so Weave needs no camera permission
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+
     // The home screen widget
     implementation("androidx.glance:glance-appwidget:1.1.1")
 

@@ -77,6 +77,10 @@ import com.t3lluz.weave.data.link.LinkShortcut
 import com.t3lluz.weave.data.link.monitorUnder
 import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.t3lluz.weave.data.link.parseInvite
 import com.t3lluz.weave.ui.components.SquircleShape
 import com.t3lluz.weave.ui.components.chromeGlass
 import com.t3lluz.weave.ui.screens.ai.MenuRow
@@ -358,6 +362,16 @@ fun LinkScreen(
                     onWake = {
                         viewModel.wake()
                         toast = "Waking $laptopName. Give it a few seconds."
+                    },
+                    onScan = {
+                        // Google's own scanner: its camera, its screen, no camera permission for Weave
+                        val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+                        GmsBarcodeScanning.getClient(context, options).startScan()
+                            .addOnSuccessListener { code ->
+                                val invite = parseInvite(code.rawValue)
+                                if (invite != null) viewModel.pair(invite) else toast = "That isn't a Weave code. Run weave pair on the computer."
+                            }
+                            .addOnFailureListener { toast = "The scanner didn't open. Type the computer's address instead." }
                     },
                 )
                 landscape -> Sideways(

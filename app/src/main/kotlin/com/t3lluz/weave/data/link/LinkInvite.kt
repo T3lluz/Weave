@@ -1,0 +1,111 @@
+package com.t3lluz.weave.data.link
+
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.NetworkInterface
+import java.net.SocketTimeoutException
+import java.net.URLDecoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+
+/**
+ * An invitation from a computer: what `weave pair` there puts in its QR code. The code lets
+ * this phone in once without the computer asking its owner; the addresses are every way the
+ * computer can be reached, tried in order.
+ */
+data class LinkInvite(val name: String, val addresses: List<String>, val port: Int, val code: String)
+
+/**
+ * Reads an invitation from what a scan or a tapped link gives: the page's address with the
+ * invitation after `#` (`https://t3lluz.com/weave/pair#n=..&a=..&p=..&c=..`), or the app's own
+ * `weave://pair?..`. Null for anything else, or one with no address or no code.
+ */
+fun parseInvite(text: String?): LinkInvite? {
+    val raw = text?.trim().orEmpty()
+    val isLink = raw.startsWith("weave://pair") || Regex("^https?://[^/]+/weave/pair([/?#].*)?$").matches(raw)
+    if (!isLink) return null
+    val query = raw.substringAfter('#', "").ifEmpty { raw.substringAfter('?', "") }
+    val fields = query.split('&').mapNotNull { part ->
+        val key = part.substringBefore('=', "")
+        if (key.isEmpty() || '=' !in part) null
+        else key to runCatching { URLDecoder.decode(part.substringAfter('='), "UTF-8") }.getOrDefault("")
+    }.toMap()
+    val addresses = fields["a"].orEmpty().split(',').map { it.trim() }.filter { ADDRESS.matches(it) }
+    val code = fields["c"].orEmpty()
+    if (addresses.isEmpty() || code.isEmpty() || code.length > 64) return null
+    val port = fields["p"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: LinkProtocol.PORT
+    return LinkInvite(fields["n"].orEmpty().take(60).ifBlank { addresses.last() }, addresses, port, code)
+}
+
+/** A host name or an IPv4 address: nothing with a slash, a space or a scheme gets through. */
+private val ADDRESS = Regex("^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
+
+/** Whether [address] is one of a home or office network (10.x, 172.16-31.x, 192.168.x), not a tailnet's. */
+fun isLocalNetwork(address: String): Boolean {
+    val p = address.trim().split('.').map { it.toIntOrNull() ?: return false }
+    if (p.size != 4 || p.any { it !in 0..255 }) return false
+    return p[0] == 10 || (p[0] == 172 && p[1] in 16..31) || (p[0] == 192 && p[1] == 168)
+}
+
+/** One computer's answer to "weave?", as a laptop of the list; null when it isn't one. */
+internal fun parseFound(reply: String, from: String): LinkHost? = runCatching {
+    val o = JSONObject(reply)
+    if (o.optInt("weave") != 1) return null
+    val name = o.optString("name").take(60).ifBlank { from }
+    LinkHost(
+        id = "lan:$from", name = name, addresses = listOf(from), port = o.optInt("port", LinkProtocol.PORT),
+        ticket = "", online = true, busy = o.optBoolean("busy"),
+    )
+}.getOrNull()
+
+/**
+ * Finds computers running Weave on this phone's own network: it asks everyone on the Wi-Fi
+ * ("weave?", a UDP broadcast) and listens for answers for [waitMs]. Nothing found is no error:
+ * off Wi-Fi, or on a network that keeps its devices apart, nobody hears the question.
+ */
+suspend fun findOnNetwork(waitMs: Int = 700): List<LinkHost> = withContext(Dispatchers.IO) {
+    val found = LinkedHashMap<String, LinkHost>()
+    runCatching {
+        DatagramSocket().use { socket ->
+            socket.broadcast = true
+            socket.soTimeout = 150
+            val ask = "weave?".toByteArray()
+            val targets = buildSet {
+                add(InetAddress.getByName("255.255.255.255"))
+                // each network's own broadcast address too: some routers drop the all-ones one
+                NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+                    .flatMap { it.interfaceAddresses }.mapNotNull { it.broadcast }.forEach(::add)
+            }
+            targets.forEach { to -> runCatching { socket.send(DatagramPacket(ask, ask.size, to, LinkProtocol.PORT)) } }
+            val until = System.currentTimeMillis() + waitMs
+            val buffer = ByteArray(2048)
+            while (System.currentTimeMillis() < until) {
+                val packet = DatagramPacket(buffer, buffer.size)
+                try {
+                    socket.receive(packet)
+                } catch (_: SocketTimeoutException) {
+                    continue
+                }
+                val from = packet.address.hostAddress ?: continue
+                parseFound(String(packet.data, 0, packet.length), from)?.let { found.putIfAbsent(from, it) }
+            }
+        }
+    }
+    found.values.toList()
+}
+
+/**
+ * The dashboard's list and the network's own, as one: a computer in both is one entry, reached
+ * by its local address first (the shorter way) and let in by the dashboard's ticket.
+ */
+internal fun mergeFound(listed: List<LinkHost>, found: List<LinkHost>): List<LinkHost> {
+    val out = listed.toMutableList()
+    for (f in found) {
+        val at = out.indexOfFirst { it.name.equals(f.name, ignoreCase = true) }
+        if (at < 0) out += f
+        else out[at] = out[at].copy(addresses = (f.addresses + out[at].addresses).distinct(), online = true, busy = out[at].busy || f.busy)
+    }
+    return out
+}

@@ -2,6 +2,8 @@ package com.t3lluz.weave.data.link
 
 import com.t3lluz.weave.data.local.SettingsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -37,10 +39,10 @@ data class LinkDirectoryState(
 )
 
 /**
- * Finds laptops without typing anything: each one announces itself to the dashboard's bridge
- * (`/_api/link`, laptop_link.py there) and this reads who is around. It reads the list the
- * dashboard's own page draws, which has no tickets (those go only to DailyDash, the phone paired
- * with the dashboard), so the first time this phone connects the laptop asks its owner.
+ * Finds computers without typing anything. Those on this phone's own network answer when asked
+ * ([findOnNetwork]). With a dashboard set (Settings), each one that announces itself to its
+ * bridge (`/_api/link`) is listed too, wherever it is. Neither list lets this phone in: the first
+ * time it connects the computer asks its owner, unless the phone scanned its code ([LinkInvite]).
  */
 @Singleton
 class LinkDirectory @Inject constructor(
@@ -53,9 +55,18 @@ class LinkDirectory @Inject constructor(
         .apply { interceptors().removeAll { it is okhttp3.logging.HttpLoggingInterceptor } }
         .build()
 
-    suspend fun laptops(): LinkDirectoryState = withContext(Dispatchers.IO) {
+    /** Every computer this phone can see: the ones on its own network, and the dashboard's when one is set. */
+    suspend fun laptops(): LinkDirectoryState = coroutineScope {
+        val near = async { findOnNetwork() }
+        val listed = fromDashboard()
+        val hosts = mergeFound(listed.hosts, near.await())
+        // a dashboard that didn't answer is only worth saying when nothing was found without it
+        LinkDirectoryState(hosts = hosts, loaded = true, problem = listed.problem.takeIf { hosts.isEmpty() })
+    }
+
+    private suspend fun fromDashboard(): LinkDirectoryState = withContext(Dispatchers.IO) {
         val base = settings.dashboardServerUrl.value.trim().trimEnd('/')
-        if (base.isBlank()) return@withContext LinkDirectoryState(loaded = true, problem = "No dashboard is set up, so laptops can't announce themselves.")
+        if (base.isBlank()) return@withContext LinkDirectoryState(loaded = true)
         try {
             val request = Request.Builder().url("$base/_api/link").get().build()
             client.newCall(request).execute().use { response ->

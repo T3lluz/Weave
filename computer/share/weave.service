@@ -1,0 +1,17 @@
+[Unit]
+Description=Weave: this computer, run from your phone
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/weave daemon
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=PYTHONUNBUFFERED=1
+# Only the daemon is signalled; it closes scrcpy itself. The adb server it may have started is
+# left running, so other adb sessions (Gradle, Android Studio) survive a restart.
+KillMode=process
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

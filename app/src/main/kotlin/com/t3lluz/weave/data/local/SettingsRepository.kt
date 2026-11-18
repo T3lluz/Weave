@@ -88,6 +88,7 @@ class SettingsRepository @Inject constructor(
         const val KEY_ANTHROPIC_MODEL = "anthropic_model"
         const val KEY_ANTHROPIC_EFFORT = "anthropic_effort"
         const val KEY_DASHBOARD_SERVER_URL = "dashboard_server_url"
-        const val DEFAULT_DASHBOARD_SERVER_URL = "https://t3lluz.com"
+        /** None: computers are found on the network or by their code. A dashboard is an extra, set in Settings. */
+        const val DEFAULT_DASHBOARD_SERVER_URL = ""
     }
 }

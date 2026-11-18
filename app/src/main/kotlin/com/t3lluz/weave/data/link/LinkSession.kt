@@ -260,7 +260,9 @@ class LinkSession @Inject constructor(
                 wait = 300L
                 droppedAt = now
             }
-            val noVpn = !vpnUp()
+            // with the computer on this phone's own network, Tailscale has no part in reaching it
+            val near = network() == "wifi" && cfg.host.split(',').any { isLocalNetwork(it) }
+            val noVpn = !vpnUp() && !near
             val grace = droppedAt > 0 && now - droppedAt < RECONNECT_GRACE_MS && !noVpn
             _state.update {
                 it.copy(
@@ -332,11 +334,11 @@ class LinkSession @Inject constructor(
 
     /** A socket error in words a person would use. */
     private fun plain(reason: String?, noVpn: Boolean): String = when {
-        noVpn -> "Tailscale is off on this phone. The laptop is only reachable through it."
-        reason == null -> "The laptop closed the connection."
-        "ECONNREFUSED" in reason || "refused" in reason -> "The laptop is on, but tandem isn't running on it."
+        noVpn -> "Tailscale is off on this phone, and the computer isn't on this Wi-Fi."
+        reason == null -> "The computer closed the connection."
+        "ECONNREFUSED" in reason || "refused" in reason -> "The computer is on, but Weave isn't running on it."
         "timed out" in reason || "ETIMEDOUT" in reason || "EHOSTUNREACH" in reason || "unreachable" in reason ->
-            "The laptop didn't answer. Is it on, and Tailscale up on both?"
+            "The computer didn't answer. Is it on, and on this Wi-Fi or your tailnet?"
         "Unable to resolve" in reason || "No address" in reason -> "That name doesn't lead anywhere. Is Tailscale up on this phone?"
         else -> reason
     }

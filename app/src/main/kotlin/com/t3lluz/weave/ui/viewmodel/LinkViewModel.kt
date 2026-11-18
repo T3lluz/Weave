@@ -120,6 +120,13 @@ class LinkViewModel @Inject constructor(
     fun stop() = session.stop()
 
     /** By hand, for a laptop the dashboard doesn't list. The laptop asks its owner the first time. */
+    /** A computer's code was scanned, or its link opened: connect, and the code lets this phone in. */
+    fun pair(invite: com.t3lluz.weave.data.link.LinkInvite) {
+        shortcutSheet = null
+        prefs.update { it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code) }
+        session.reconnect()
+    }
+
     fun connectTo(address: String) {
         prefs.update { it.copy(host = address.trim(), port = com.t3lluz.weave.data.link.LinkProtocol.PORT, name = address.trim(), ticket = "") }
         session.reconnect()

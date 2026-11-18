@@ -18,6 +18,7 @@
         <package android:name="com.tailscale.ipn" />
     </queries>
 
+    <!-- The code scanner comes with Google Play services: fetch it when Weave is installed, not on the first scan -->
     <application
         android:name=".WeaveApp"
         android:allowBackup="false"
@@ -26,6 +27,10 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Weave">
+
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
 
         <!-- Shares downloaded update APKs with the system package installer -->
         <provider
@@ -95,6 +100,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A computer's pairing link: weave://pair?..., which the pairing page hands over -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="weave" android:host="pair" />
             </intent-filter>
         </activity>
     </application>
