@@ -1,0 +1,542 @@
+package com.t3lluz.weave.ui.theme
+
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+
+/**
+ * DailyDash — single source of truth for every animation spec in the app.
+ *
+ * Design principle: smooth, critically-damped motion with zero bounce.
+ * Each layer animates exactly once — the page transition handles the
+ * entrance; individual elements DON'T re-slide / re-scale on top of it.
+ * Value-driven animations (progress bars, chart bars) use a smooth
+ * spring so they settle cleanly without overshoot.
+ *
+ * Exception: [bouncySpring] is reserved for the bottom nav pill only.
+ */
+object AppMotion {
+
+    // ── Smooth spring (no bounce) ────────────────────────────────────
+    // Critically damped = fastest settle with zero overshoot.
+    private const val SMOOTH_DAMPING = 1f       // no bounce at all
+    private const val SMOOTH_STIFFNESS = 400f   // snappy settle
+
+    /** Smooth spring for value animations (progress bars, chart bars).
+     *  No overshoot — the value slides to its target and stops. */
+    fun <T> entranceSpring() = spring<T>(
+        dampingRatio = SMOOTH_DAMPING,
+        stiffness = SMOOTH_STIFFNESS,
+    )
+
+    /** Spring for the bottom nav pill — the only element with a subtle bounce. */
+    fun <T> bouncySpring() = spring<T>(
+        dampingRatio = 0.75f,
+        stiffness = 350f,
+    )
+
+    /** Quick spring for press/release feedback (buttons, drag lift, chevrons). */
+    fun <T> pressSpring() = spring<T>(
+        dampingRatio = 1f,
+        stiffness = 600f,
+    )
+
+    /** Critically-damped confirm pulse for primary CTA micro-feedback (add/check). */
+    fun <T> confirmSpring() = spring<T>(
+        dampingRatio = 1f,
+        stiffness = 550f,
+    )
+
+    // ── Tween durations ──────────────────────────────────────────────
+    private const val FADE_IN_MS = 200
+    private const val FADE_OUT_MS = 150
+    private const val SLIDE_MS = 300
+    private const val COLOR_MS = 160
+    private const val REVEAL_MS = 400
+
+    /** Shared fade tween for card entrances and crossfades. */
+    fun <T> fadeTween(durationMs: Int = FADE_IN_MS): FiniteAnimationSpec<T> =
+        tween(durationMs, easing = FastOutSlowInEasing)
+
+    /** Shared slide tween for phase / content slides. */
+    fun <T> slideTween(durationMs: Int = SLIDE_MS): FiniteAnimationSpec<T> =
+        tween(durationMs, easing = FastOutSlowInEasing)
+
+    /** Color / chrome micro-transitions (tabs, pills, CTA fills). */
+    fun <T> colorTween(durationMs: Int = COLOR_MS): FiniteAnimationSpec<T> =
+        tween(durationMs, easing = FastOutSlowInEasing)
+
+    /** Staggered onboarding alpha reveals (no translate — page owns slide). */
+    fun <T> revealTween(durationMs: Int = REVEAL_MS): FiniteAnimationSpec<T> =
+        tween(durationMs, easing = FastOutSlowInEasing)
+
+    /**
+     * Soft pulse (typing dots, calm character marks). Always go through here —
+     * never `infiniteRepeatable(tween(...))` at a call site.
+     */
+    fun pulseSpec(
+        durationMs: Int = 400,
+        delayMs: Int = 0,
+    ): InfiniteRepeatableSpec<Float> = infiniteRepeatable(
+        animation = tween(durationMs, delayMillis = delayMs, easing = FastOutSlowInEasing),
+        repeatMode = RepeatMode.Reverse,
+    )
+
+    /**
+     * Live "on air" halo — expands outward and fades, then restarts. Restart
+     * (not Reverse) so it reads as a broadcast ping rather than a breath.
+     */
+    fun livePulseSpec(durationMs: Int = 1400): InfiniteRepeatableSpec<Float> = infiniteRepeatable(
+        animation = tween(durationMs, easing = FastOutSlowInEasing),
+        repeatMode = RepeatMode.Restart,
+    )
+
+    /** Chart reveal (area/line/bar grow-in). Slightly longer than fades for presence. */
+    fun <T> chartRevealTween(durationMs: Int = 700): FiniteAnimationSpec<T> =
+        tween(durationMs, easing = FastOutSlowInEasing)
+
+    /**
+     * Coming up carousel: a programmatic move (Today, a fortnight arrow, a tap on a peek)
+     * travels the strip instead of cutting to it, for longer the further it goes.
+     * One step eases out like a release; a journey eases in too so it gathers speed
+     * rather than bolting. Same curve the t3lluz web timeline uses.
+     */
+    fun <T> carouselTravel(distance: Int): FiniteAnimationSpec<T> {
+        val far = kotlin.math.abs(distance)
+        val ms = (CAROUSEL_TRAVEL_MIN_MS + CAROUSEL_TRAVEL_PER_MS * kotlin.math.sqrt(far.toFloat()))
+            .toInt().coerceAtMost(CAROUSEL_TRAVEL_MAX_MS)
+        return tween(ms, easing = if (far > 2) CarouselJourneyEasing else CarouselStepEasing)
+    }
+
+    /**
+     * The F1 circuit painting itself, as the t3lluz dashboard does it: the marque line
+     * grows along the lap from the start/finish line with the car riding its head,
+     * both on one eased clock so the dot can never drift off the end of the line.
+     */
+    object CircuitPaint {
+        val Easing = CubicBezierEasing(0.42f, 0.02f, 0.22f, 1f)
+
+        /** Monaco and Spa are not the same lap: ~19 ms per box unit, held to 4–9 s. */
+        fun durationMs(lapUnits: Float): Long =
+            (lapUnits * MS_PER_UNIT).toLong().coerceIn(MIN_MS, MAX_MS)
+
+        /** The car fades in over the first 6% of the paint. */
+        const val CAR_FADE_IN = 0.06f
+
+        /** A pause after the map lands so the eye is on it before it starts. */
+        const val DELAY_ONCE_MS = 250L
+        const val DELAY_REPLAY_MS = 800L
+
+        /** The backdrop's car keeps lapping once painted, slowly and at half brightness. */
+        const val LAP_MS = 22_000L
+        const val LAP_DIM_AT = 0.08f
+        const val LAP_ALPHA = 0.5f
+
+        /** The filling line (the F1 glance): how long it stays whole, and how long the track stays bare. */
+        const val FILL_HOLD_MS = 2_200L
+        const val FILL_BARE_MS = 700L
+
+        /** Share of the map that has to be on screen before a lap is started. */
+        const val VISIBLE_TO_PAINT = 0.15f
+
+        private const val MS_PER_UNIT = 19f
+        private const val MIN_MS = 4_000L
+        private const val MAX_MS = 9_000L
+    }
+
+    /**
+     * The contribution snake (Platane/snk's idea, as the t3lluz dashboard draws it):
+     * head plus four segments, one lap of the year in about 36 s, the per-cell step
+     * held between 46 and 120 ms so a thin year does not crawl nor a dense one blur.
+     */
+    object Snake {
+        const val LENGTH = 5
+        const val LAP_MS = 36_000L
+        const val STEP_SLOW_MS = 120L
+        const val STEP_FAST_MS = 46L
+        const val HOLD_MS = 900L
+        const val REGROW_MS = 760L
+        const val REST_MS = 420L
+    }
+
+    /**
+     * opencode's working indicator, as its TUI draws it: eight blocks, a bright lead with a
+     * six-step trail sweeping out and back, a short rest at the far end and a long one at
+     * home while the trail fades, one frame every 40 ms (about 2.2 s a cycle).
+     */
+    object WorkingScanner {
+        const val FRAME_MS = 40L
+        const val BLOCKS = 8
+        const val HOLD_START = 30
+        const val HOLD_END = 9
+        const val TRAIL = 6
+
+        /** Resting blocks are the accent at this alpha, dimmed further by the fade. */
+        const val INACTIVE_ALPHA = 0.6f
+        const val MIN_ALPHA = 0.3f
+    }
+
+    /**
+     * Essentials' liquid ripple (`ui/components/LiquidRipple.kt`), with the values its home
+     * uses when a pull passes the refresh threshold: one wave out from the header in 2.8 s.
+     * The pull ticks every tenth of the way there, as Essentials does.
+     */
+    object LiquidRipple {
+        const val DURATION_MS = 2800
+        const val AMPLITUDE_DP = 34f
+        const val FREQUENCY = 12f
+        const val DECAY = 4.5f
+        const val SPEED_DP = 1400f
+        const val PULL_TICKS = 10
+
+        /**
+         * There is no spinner: the page itself follows the finger, this share of the pull's
+         * (already damped) travel, and springs back the moment it is let go.
+         */
+        const val PULL_FOLLOW = 0.6f
+
+        /** The page settling back after a pull: quick, with a touch of give. */
+        fun <T> settleSpring() = spring<T>(dampingRatio = 0.78f, stiffness = 420f)
+    }
+
+    /**
+     * The Health tab opening: its blocks rise into place one after another, top down, once.
+     * The body clock then paints the day in by itself.
+     */
+    object HealthEntrance {
+        const val MS = 950
+    }
+
+    /**
+     * Health's body clock. While the day is read a light sweeps the empty face; then it draws
+     * itself in with one turn of the hand. A tap on the face
+     * reads that time for [PEEK_MS]; a finger held still for [HOLD_MS] takes the face over
+     * (sooner, and a scroll that starts on it would be read as a hold).
+     */
+    object BodyClock {
+        const val TURN_MS = 1300
+        const val PEEK_MS = 2600L
+        const val HOLD_MS = 110L
+
+        /** One sweep of the light that circles the face while the day is being read. */
+        const val SEEK_MS = 1500L
+    }
+
+    /** A held minus or plus (the goals sheet): one step at once, then a run after a pause. */
+    object HoldRepeat {
+        const val START_MS = 420L
+        const val EVERY_MS = 90L
+    }
+
+    /**
+     * Home's Body Stats chart moving on by itself (steps → heart → Move → sleep) until the
+     * person picks one: slow enough to read each, a plain crossfade between them.
+     */
+    object GlanceCycle {
+        const val INTERVAL_MS = 8_000L
+
+        val transform: ContentTransform
+            get() = fadeIn(tween(320, easing = FastOutSlowInEasing)) togetherWith
+                fadeOut(tween(FADE_OUT_MS, easing = FastOutSlowInEasing))
+    }
+
+    /**
+     * The F1 countdown's digits rolling over: the old one slides up and out of its own box
+     * while the new one rises in from below, the way a countdown ticks on iOS. Only digits
+     * that change move, and the roll is done well before the next second.
+     */
+    /**
+     * Tilesmith's shapes morphing from one to the next (graphics-shapes' `Morph`), M3
+     * Expressive's signature motion: a spring-like settle into each shape, then a short hold.
+     * The hero morphs slowly; the "smithing" mark while the AI works is quicker.
+     */
+    object Tilesmith {
+        /** One shape to the next, hero. */
+        const val MORPH_MS = 900
+
+        /** How long the hero holds a shape before the next morph. */
+        const val HOLD_MS = 1_400
+
+        /** One shape to the next while the AI works. */
+        const val WORKING_MS = 650
+
+        /** Overshoots a little and settles, as M3's expressive spatial springs do. */
+        val MORPH_EASING = CubicBezierEasing(0.34f, 1.36f, 0.64f, 1f)
+
+        /** A slow turn under the morph, degrees per morph. */
+        const val TURN_DEG = 45f
+
+    }
+
+    object CountdownRoll {
+        const val DURATION_MS = 420
+
+        /** Leaves quickly, lands softly. */
+        private val EASING = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
+        val transform: ContentTransform
+            get() = ContentTransform(
+                targetContentEnter = slideInVertically(tween(DURATION_MS, easing = EASING)) { it } +
+                    fadeIn(tween(DURATION_MS / 2, delayMillis = DURATION_MS / 6)),
+                initialContentExit = slideOutVertically(tween(DURATION_MS, easing = EASING)) { -it } +
+                    fadeOut(tween(DURATION_MS / 2)),
+                sizeTransform = SizeTransform(clip = true),
+            )
+    }
+
+    /**
+     * Swiping an item off the island's card, after Android 16's magnetic notification swipe:
+     * the row moves at half the finger's pace while its neighbours lean with it, then detaches
+     * (a haptic) and follows the finger; let go short and it springs home, past it and it flies.
+     */
+    object IslandSwipe {
+        /** The row's pace while still attached, and its neighbours' (one row away, two rows away). */
+        const val ATTACHED = 0.5f
+        val NEIGHBOURS = floatArrayOf(0.12f, 0.04f)
+
+        /** Finger travel that detaches the row, and the travel back under which it re-attaches. */
+        const val DETACH_DP = 96f
+        const val ATTACH_DP = 72f
+
+        /** A flick this fast (dp/s) clears the row even before it detaches. */
+        const val FLING_DP_S = 1100f
+
+        /** How long the undo stays up after a clear. */
+        const val UNDO_MS = 4_500L
+
+        /** After letting go of a cleared row, how long it flies before the gap under it starts closing. */
+        const val CLOSE_AFTER_MS = 90L
+
+        /** Catching up with the finger on detach: quick, nearly no bounce. */
+        fun <T> detach() = spring<T>(dampingRatio = 0.95f, stiffness = 800f)
+
+        /** Home again when let go short, with a little give. */
+        fun <T> settle() = spring<T>(dampingRatio = 0.66f, stiffness = 520f)
+
+        /** Off the edge, carrying the flick. */
+        fun <T> fly() = spring<T>(dampingRatio = 1f, stiffness = 360f)
+
+        /** The gap closing under a cleared row. */
+        fun <T> close() = spring<T>(dampingRatio = 0.9f, stiffness = 520f)
+    }
+
+    /** The navbar's activity tab rising out of the pill and settling back into it: a touch of give, no wobble. */
+    /** The band of light across a word that is happening (ShimmerText): one pass every 1.6 s. */
+    /** The laptop remote (LinkScreen): its glass controls, its buttons, and two-finger momentum. */
+    object Link {
+        /** The full-screen controls unfolding from their handle, and folding back. */
+        fun <T> panel() = spring<T>(dampingRatio = 0.84f, stiffness = 520f)
+
+        /** Each control arrives a beat after the one before it. */
+        fun <T> arrive(index: Int): FiniteAnimationSpec<T> = tween(220, delayMillis = 40 + index * 28, easing = FastOutSlowInEasing)
+        fun <T> leave(): FiniteAnimationSpec<T> = tween(110, easing = FastOutSlowInEasing)
+
+        /** A button giving under the finger. */
+        fun <T> press() = spring<T>(dampingRatio = 0.62f, stiffness = 900f)
+        const val PRESSED_SCALE = 0.9f
+
+        /** The laptop's picture fading in once the first frame is decoded. */
+        fun <T> picture(): FiniteAnimationSpec<T> = tween(320, easing = FastOutSlowInEasing)
+
+        /**
+         * The picture sliding from one monitor to the next, the way the pointer went: the old
+         * one leaves as the new one arrives, and it stops without bouncing (the owner asked for
+         * a plain slide).
+         */
+        fun <T> swipe() = spring<T>(dampingRatio = 1f, stiffness = 400f)
+
+        /** About how long a slide between monitors takes: the picture's box changes shape after it. */
+        const val SWIPE_SETTLE_MS = 340L
+
+        /** A new quality on the same monitor: one picture fades into the other. */
+        fun <T> swap(): FiniteAnimationSpec<T> = tween(260, easing = FastOutSlowInEasing)
+
+        /** How far a picture is shrunk while it is off to the side: the leaving one shrinks as it goes, the arriving one grows to full size, for depth. */
+        const val SWIPE_DEPTH = 0.08f
+
+        /** A switch whose new picture never arrives lets go of the old one after this long. */
+        const val SWIPE_WAIT_MS = 1_200L
+
+        /** The trackpad's cloth giving under a finger, and springing back past flat when it lifts. */
+        fun <T> dentIn() = spring<T>(dampingRatio = 0.72f, stiffness = 700f)
+        fun <T> dentOut() = spring<T>(dampingRatio = 0.36f, stiffness = 380f)
+
+        /** The most a swipe between monitors blurs along its way, in dp, at full speed. */
+        const val SWIPE_BLUR_DP = 33f
+
+        /** The quality picker's highlight sliding to the picked one. */
+        fun <T> segment() = spring<T>(dampingRatio = 0.8f, stiffness = 520f)
+
+        /** How long the full-screen controls stay open untouched, and a message stays up. */
+        const val CONTROLS_STAY_MS = 6_000L
+        const val TOAST_MS = 2_600L
+
+        /** A shortcut moving to its new place as one is dragged past it, or one is added or taken away. */
+        fun <T> reorder() = spring<T>(dampingRatio = 0.86f, stiffness = 620f)
+
+        /** How long a shortcut stays lit after a tap: long enough to see, gone before the next tap. */
+        const val FLASH_MS = 420
+
+        /** The shortcuts wiggling while they are arranged: one sway a quarter of a second. */
+        fun wiggle(): InfiniteRepeatableSpec<Float> = infiniteRepeatable(tween(260, easing = LinearEasing), RepeatMode.Restart)
+
+
+        /** Two-finger scroll keeps going after the fingers lift, losing this share of its speed each frame. */
+        const val FLING_KEEP = 0.955f
+        const val FLING_FRAME_MS = 16L
+    }
+
+    fun shimmerSpec(): InfiniteRepeatableSpec<Float> = infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart)
+
+    fun <T> navTabSpring() = spring<T>(dampingRatio = 0.82f, stiffness = 420f)
+
+    private const val CAROUSEL_TRAVEL_MIN_MS = 300
+    private const val CAROUSEL_TRAVEL_PER_MS = 110
+    private const val CAROUSEL_TRAVEL_MAX_MS = 1100
+    private val CarouselStepEasing = CubicBezierEasing(0.33f, 1f, 0.68f, 1f)
+    private val CarouselJourneyEasing = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
+
+    /**
+     * Splash overlay — the one cinematic sequence in the app, and the only place
+     * with bespoke easings. They live here, not at the call site, so
+     * [AppMotion] really is the single source for every spec.
+     */
+    object Splash {
+        val EntranceEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+        val WarpEasing = CubicBezierEasing(0.7f, 0f, 1f, 1f)
+        val ExitEasing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
+
+        /** Phase 1 — logo fade / glow / scale in. */
+        fun <T> logoFadeIn(): FiniteAnimationSpec<T> = tween(400, easing = EntranceEasing)
+        fun <T> glowFadeIn(): FiniteAnimationSpec<T> = tween(500, easing = EntranceEasing)
+        fun <T> logoScaleIn(): FiniteAnimationSpec<T> = tween(550, easing = EntranceEasing)
+
+        /** Phase 2 — the glow breathes. */
+        const val PULSE_MS = 400
+        fun <T> glowPulse(): FiniteAnimationSpec<T> = tween(PULSE_MS, easing = LinearEasing)
+
+        /** Phase 3 — warp zoom + chromatic dissolve. */
+        fun <T> glowOut(): FiniteAnimationSpec<T> = tween(160, easing = LinearEasing)
+        fun <T> chromaIn(): FiniteAnimationSpec<T> = tween(140, easing = LinearEasing)
+        fun <T> chromaSpread(): FiniteAnimationSpec<T> = tween(240, easing = ExitEasing)
+        fun <T> chromaOut(): FiniteAnimationSpec<T> = tween(220, easing = LinearEasing)
+        fun <T> backdropSeal(): FiniteAnimationSpec<T> = tween(480, easing = ExitEasing)
+        fun <T> warpZoom(): FiniteAnimationSpec<T> = tween(560, easing = WarpEasing)
+    }
+
+    // ── Tab / content-switch transitions (NavHost top-level tabs) ────
+    val contentEnter: EnterTransition = fadeIn(tween(FADE_IN_MS, easing = FastOutSlowInEasing))
+
+    val contentExit: ExitTransition = fadeOut(tween(FADE_OUT_MS, easing = FastOutSlowInEasing))
+
+    /** Crossfade used by home-screen widget state switches (loading → success, etc.). */
+    val widgetContentTransition: ContentTransform
+        get() = contentEnter togetherWith contentExit
+
+    /**
+     * A hub's body swapping (a channel filter picked, loading turning into the feed): the new
+     * content fades in over the old while the card eases to its new height, so nothing below
+     * it jumps.
+     */
+    val hubBodySwap: ContentTransform
+        get() = ContentTransform(
+            targetContentEnter = fadeIn(fadeTween(220)),
+            initialContentExit = fadeOut(fadeTween(FADE_OUT_MS)),
+            sizeTransform = SizeTransform(clip = true) { _, _ ->
+                tween(SLIDE_MS, easing = FastOutSlowInEasing)
+            },
+        )
+
+    /** Icon swap on primary CTAs (add ↔ check ↔ remove). */
+    val iconSwapTransition: ContentTransform
+        get() = (fadeIn(fadeTween(150)) + scaleIn(fadeTween(150))) togetherWith
+            fadeOut(fadeTween(100))
+
+    /**
+     * In-card tab pager (F1 hub). Directional slide + fade.
+     * Pair with SizeTransform in the call site if height should morph.
+     * Content must use the AnimatedContent lambda target — never the outer
+     * selected-tab state — or enter/exit desync.
+     */
+    fun inCardTabSwitch(toRight: Boolean): ContentTransform {
+        val dir = if (toRight) 1 else -1
+        return ContentTransform(
+            targetContentEnter = fadeIn(fadeTween(200)) + slideInHorizontally(slideTween(260)) { dir * it / 5 },
+            initialContentExit = fadeOut(fadeTween(140)) + slideOutHorizontally(slideTween(200)) { -dir * it / 5 },
+            sizeTransform = SizeTransform(clip = false) { _, _ ->
+                tween(260, easing = FastOutSlowInEasing)
+            },
+        )
+    }
+
+    /** Number ticker for live totals (calories / protein on scan result). */
+    fun numberTick(up: Boolean): ContentTransform {
+        val enterDir = if (up) 1 else -1
+        val exitDir = if (up) -1 else 1
+        return (slideInVertically(slideTween()) { enterDir * it } + fadeIn(fadeTween()))
+            .togetherWith(slideOutVertically(slideTween()) { exitDir * it } + fadeOut(fadeTween(FADE_OUT_MS)))
+    }
+
+    // ── Expand / collapse transitions (AnimatedVisibility) ───────────
+    val expandEnter: EnterTransition =
+        expandVertically(tween(SLIDE_MS, easing = FastOutSlowInEasing)) +
+            fadeIn(tween(FADE_IN_MS, easing = FastOutSlowInEasing))
+
+    val expandExit: ExitTransition =
+        shrinkVertically(tween(SLIDE_MS, easing = FastOutSlowInEasing)) +
+            fadeOut(tween(FADE_OUT_MS, easing = FastOutSlowInEasing))
+
+    // ── Native-style slide transitions (Stats, CameraScan, Help) ───────
+    // 100% slide for the "active" screen, 30% parallax for the "background" screen.
+    // Also used for predictive back so the gesture slides instead of fading.
+    val subScreenEnter: EnterTransition =
+        slideInHorizontally(
+            animationSpec = tween(SLIDE_MS, easing = FastOutSlowInEasing),
+        ) { it }
+
+    val subScreenExit: ExitTransition =
+        slideOutHorizontally(
+            animationSpec = tween(SLIDE_MS, easing = FastOutSlowInEasing),
+        ) { -it / 3 }
+
+    val subScreenPopEnter: EnterTransition =
+        slideInHorizontally(
+            animationSpec = tween(SLIDE_MS, easing = FastOutSlowInEasing),
+        ) { -it / 3 }
+
+    val subScreenPopExit: ExitTransition =
+        slideOutHorizontally(
+            animationSpec = tween(SLIDE_MS, easing = FastOutSlowInEasing),
+        ) { it }
+
+    // ── Directional tab transitions ──────────────────────────────────
+    fun tabEnter(toRight: Boolean): EnterTransition =
+        slideInHorizontally(
+            animationSpec = tween(SLIDE_MS, easing = FastOutSlowInEasing),
+        ) { if (toRight) it else -it }
+
+    fun tabExit(toRight: Boolean): ExitTransition =
+        slideOutHorizontally(
+            animationSpec = tween(SLIDE_MS, easing = FastOutSlowInEasing),
+        ) { if (toRight) -it / 3 else it / 3 }
+}

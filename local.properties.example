@@ -1,0 +1,8 @@
+## Copy to local.properties. It is gitignored, never commit real keys.
+
+sdk.dir=/path/to/Android/Sdk
+
+# Optional. Baked in as a fallback when no key is saved in Settings → AI.
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=

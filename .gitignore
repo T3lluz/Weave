@@ -1,0 +1,74 @@
+# --- Local / secrets (never commit) ---
+.env
+.env.*
+!.env.example
+local.properties
+credentials.json
+credentials/
+google-services.json
+*.jks
+*.keystore
+!app/tester.jks
+
+# --- Local toolchains (never commit) ---
+.jdk/
+
+# --- Build outputs ---
+.gradle/
+.gradle-user-home/
+build/
+*/build/
+dist/
+captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+
+# --- IDE ---
+*.iml
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/dictionaries
+.idea/**/shelf
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+.idea/deviceManager.xml
+.idea/deploymentTargetSelector.xml
+.idea/androidStudioPreview*
+.idea/copilot*
+.idea/discord.xml
+.idea/appInsightsSettings.xml
+.idea/planningMode.xml
+.idea/migrations.xml
+.idea/markdown.xml
+.idea/AndroidProjectSystem.xml
+.idea/.name
+*.swp
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+%ProgramData%/
+
+# --- Agent / tooling leftovers ---
+.artifacts/
+.tmp/
+node_modules/
+.expo/
+*.log
+
+# --- One-off local scripts (keep out of the tree) ---
+auto_pull.ps1
+fix_*.py
+generate_icons.py
