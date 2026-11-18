@@ -728,42 +728,13 @@ class LinkSession @Inject constructor(
         send("""{"t":"catalog"}""")
     }
 
-    /** Does what [s] says on the laptop. */
     /** Does one step on the laptop at once. A wait does nothing here: [runSteps] waits it out. */
     fun run(s: LinkStep) {
-        when (s.kind) {
-            LinkShortcutKind.APP -> sendJson(JSONObject().put("t", "launch").put("app", s.app))
-            LinkShortcutKind.SITE -> openOnLaptop(s.url)
-            LinkShortcutKind.KEYS -> key(s.key, s.mods)
-            LinkShortcutKind.TEXT -> text(s.text)
-            LinkShortcutKind.WAIT -> Unit
-        }
+        stepMessage(s)?.let(::sendJson)
     }
 
-    /**
-     * A shortcut's steps, in order. A wait waits. A step after an app or a page waits until that
-     * has had [SETTLE_MS] or [PAGE_SETTLE_MS] to come to the front, waits in between counting
-     * toward it: Vesktop takes 0.8 to 1 s to take focus on t3lluz, and keys sent before that land
-     * in whatever window had it. Other steps get a beat between them, so two key presses never
-     * run together.
-     */
-    suspend fun runSteps(steps: List<LinkStep>) {
-        var readyAt = 0L
-        for (step in steps) {
-            if (step.kind == LinkShortcutKind.WAIT) {
-                kotlinx.coroutines.delay(step.ms.toLong())
-                continue
-            }
-            val now = android.os.SystemClock.uptimeMillis()
-            if (readyAt > now) kotlinx.coroutines.delay(readyAt - now)
-            run(step)
-            readyAt = android.os.SystemClock.uptimeMillis() + when (step.kind) {
-                LinkShortcutKind.APP -> SETTLE_MS
-                LinkShortcutKind.SITE -> PAGE_SETTLE_MS
-                else -> BEAT_MS
-            }
-        }
-    }
+    /** A shortcut's steps, in order and at their pace ([paceSteps]). */
+    suspend fun runSteps(steps: List<LinkStep>) = paceSteps(steps, ::run)
 
     /** The picture stopped (its recorder died): ask for it again, as it was. */
     fun retryVideo() {
@@ -794,5 +765,39 @@ class LinkSession @Inject constructor(
         const val LOCAL_CURSOR = "localcursor"
         /** This tandem sends its clipboard as it changes, for the phone to keep the two in step. */
         const val CLIP_SYNC = "clipsync"
+    }
+}
+
+/** What a step asks of the laptop, as its message; null for a wait, which is the phone's to sit out. */
+internal fun stepMessage(s: LinkStep): JSONObject? = when (s.kind) {
+    LinkShortcutKind.APP -> JSONObject().put("t", "launch").put("app", s.app)
+    LinkShortcutKind.SITE -> JSONObject().put("t", "open").put("url", s.url)
+    LinkShortcutKind.KEYS -> JSONObject().put("t", "key").put("key", s.key).put("mods", JSONArray(s.mods))
+    LinkShortcutKind.TEXT -> JSONObject().put("t", "text").put("s", s.text)
+    LinkShortcutKind.WAIT -> null
+}
+
+/**
+ * A shortcut's steps, in order, each handed to [send] when its time comes. A wait waits. A step
+ * after an app or a page waits until that has had [LinkSession.SETTLE_MS] or
+ * [LinkSession.PAGE_SETTLE_MS] to come to the front, waits in between counting toward it: Vesktop
+ * takes 0.8 to 1 s to take focus on t3lluz, and keys sent before that land in whatever window had
+ * it. Other steps get a beat between them, so two key presses never run together.
+ */
+internal suspend fun paceSteps(steps: List<LinkStep>, send: (LinkStep) -> Unit) {
+    var readyAt = 0L
+    for (step in steps) {
+        if (step.kind == LinkShortcutKind.WAIT) {
+            kotlinx.coroutines.delay(step.ms.toLong())
+            continue
+        }
+        val now = android.os.SystemClock.uptimeMillis()
+        if (readyAt > now) kotlinx.coroutines.delay(readyAt - now)
+        send(step)
+        readyAt = android.os.SystemClock.uptimeMillis() + when (step.kind) {
+            LinkShortcutKind.APP -> LinkSession.SETTLE_MS
+            LinkShortcutKind.SITE -> LinkSession.PAGE_SETTLE_MS
+            else -> LinkSession.BEAT_MS
+        }
     }
 }

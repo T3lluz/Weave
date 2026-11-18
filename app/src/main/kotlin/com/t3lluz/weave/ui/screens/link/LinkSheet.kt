@@ -1,6 +1,10 @@
 package com.t3lluz.weave.ui.screens.link
 
+import android.appwidget.AppWidgetManager
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import com.t3lluz.weave.data.link.LinkSession
+import com.t3lluz.weave.widget.ShortcutsWidgetConfigActivity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -133,6 +137,11 @@ internal fun LinkSheet(
                 RoomTitle(AppIcons.Bolt, "Shortcuts", LinkShortcutTone)
                 ToggleRow("Show the shortcuts", "Off: the trackpad gets their room", config.showShortcuts, LinkShortcutTone) {
                     viewModel.change { it.copy(showShortcuts = !it.showShortcuts) }
+                }
+                // pick which ones, then the home screen asks where the widget goes
+                val context = LocalContext.current
+                if (remember { AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported }) {
+                    ActionRow(AppIcons.Grid, "Put some on the home screen", LinkShortcutTone) { ShortcutsWidgetConfigActivity.newWidget(context) }
                 }
             }
 

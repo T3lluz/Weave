@@ -116,6 +116,9 @@ dependencies {
     // The background check for a new release (in-app updates)
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 
+    // The home screen widget
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub on the JVM; the real one lets the parsers be tested.
     testImplementation("org.json:json:20240303")

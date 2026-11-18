@@ -56,6 +56,35 @@
             </intent-filter>
         </receiver>
 
+        <!-- Shortcuts on the home screen: a tap runs one without opening Weave -->
+        <receiver
+            android:name=".widget.ShortcutsWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_shortcuts_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/shortcuts_widget_info" />
+        </receiver>
+
+        <!-- The home screen added the widget asked for from Weave: its shortcuts go on it -->
+        <receiver
+            android:name=".widget.WidgetPinnedReceiver"
+            android:exported="false" />
+
+        <!-- Which shortcuts a widget shows; the home screen opens it when one is added or edited -->
+        <activity
+            android:name=".widget.ShortcutsWidgetConfigActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

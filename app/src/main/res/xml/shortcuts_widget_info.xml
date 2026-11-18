@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shortcuts on the home screen. 4 x 2 cells to start with (eight shortcuts on a Pixel's grid);
+     down to one cell high or two wide, up to the whole width and four rows. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="50dp"
+    android:maxResizeHeight="420dp"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewLayout="@layout/widget_shortcuts_preview"
+    android:description="@string/widget_shortcuts_description"
+    android:configure="com.t3lluz.weave.widget.ShortcutsWidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />
