@@ -3,7 +3,7 @@
 import sys
 import unittest
 
-from weave.win import capture, catalog, inject, screen
+from weave.win import capture, catalog, helpers, inject, screen
 
 
 class Picture(unittest.TestCase):
@@ -77,6 +77,9 @@ class Keys(unittest.TestCase):
         self.assertEqual(inject.layout_stroke(0x0632), (0x32, False, True))       # @ on a Nordic layout: AltGr + 2
         self.assertIsNone(inject.layout_stroke(-1), "no key for it: sent as itself")
         self.assertIsNone(inject.layout_stroke(0x0241), "ctrl + a is a command, not a character")
+        # ^ on a Norwegian layout is a dead key: pressing it types nothing until the next letter
+        self.assertIsNone(inject.layout_stroke(0x01DD, dead=True))
+        self.assertEqual(inject.layout_stroke(0x01DD), (0xDD, True, False))
 
     def test_a_point_maps_onto_the_whole_desktop(self):
         desk = (-1920, 0, 3840, 1080)   # a monitor to the left of the main one
@@ -84,6 +87,17 @@ class Keys(unittest.TestCase):
         self.assertEqual(inject.normalized(1919, 1079, desk), (65535, 65535))
         x, _ = inject.normalized(0, 0, desk)
         self.assertAlmostEqual(x, 32776, delta=2)
+
+
+class PowerShellText(unittest.TestCase):
+    def test_no_kind_of_quote_ends_the_string_early(self):
+        self.assertEqual(helpers.ps_quote("plain"), "'plain'")
+        self.assertEqual(helpers.ps_quote("O'Brien"), "'O''Brien'")
+        # PowerShell also closes a string at the typographic quotes a phone's name can carry
+        self.assertEqual(helpers.ps_quote("Fredde\u2019s Pixel"), "'Fredde\u2019\u2019s Pixel'")
+        for quote in "'\u2018\u2019\u201a\u201b":
+            inner = helpers.ps_quote(f"a{quote}; calc.exe; {quote}b")[1:-1]
+            self.assertEqual(inner.count(quote) % 2, 0, f"every {quote!r} doubled")
 
 
 class StartMenu(unittest.TestCase):

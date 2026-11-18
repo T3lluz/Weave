@@ -8,6 +8,14 @@ import hashlib
 from ..config import DATA_DIR
 from ..proc import run
 
+def ps_quote(text: str) -> str:
+    """[text] as a PowerShell string that is only ever text. PowerShell ends a single-quoted
+    string at the typographic quotes too, so all of them are doubled, not just the plain one."""
+    for quote in "'\u2018\u2019\u201a\u201b":
+        text = text.replace(quote, quote + quote)
+    return "'" + text + "'"
+
+
 _built: dict[str, str | None] = {}
 _lock = asyncio.Lock()
 
@@ -26,7 +34,8 @@ async def build(name: str, source: str, references: tuple[str, ...] = ()) -> str
             refs = f" -ReferencedAssemblies {','.join(references)}" if references else ""
             await run(
                 "powershell.exe", "-NoProfile", "-Command",
-                f"Add-Type -TypeDefinition (Get-Content -Raw -Encoding UTF8 '{code}'){refs} -OutputAssembly '{exe}' -OutputType ConsoleApplication",
+                f"Add-Type -TypeDefinition (Get-Content -Raw -Encoding UTF8 -LiteralPath {ps_quote(str(code))}){refs} "
+                f"-OutputAssembly {ps_quote(str(exe))} -OutputType ConsoleApplication",
                 timeout=90)
             # an older build of the same helper only takes space
             for old in folder.glob(f"{name}-*.exe"):

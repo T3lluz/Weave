@@ -44,7 +44,11 @@ async def serve(command):
             pass
 
     if WINDOWS:
-        return await asyncio.start_server(one, "127.0.0.1", PORT)
+        try:
+            return await asyncio.start_server(one, "127.0.0.1", PORT)
+        except OSError as err:
+            raise SystemExit(f"weave: port {PORT} on this PC is taken (another weave, or another program): {err}")
+    SOCKET.parent.mkdir(parents=True, exist_ok=True)
     try:
         SOCKET.unlink()
     except FileNotFoundError:

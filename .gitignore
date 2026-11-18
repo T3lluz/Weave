@@ -72,3 +72,7 @@ node_modules/
 auto_pull.ps1
 fix_*.py
 generate_icons.py
+
+# --- Python (the computer side) ---
+__pycache__/
+*.pyc

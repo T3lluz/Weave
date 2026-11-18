@@ -96,6 +96,11 @@ class ShortcutsWidgetConfigActivity : ComponentActivity() {
         val widgets = AppWidgetManager.getInstance(this)
         val widgetId = intent?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID) ?: AppWidgetManager.INVALID_APPWIDGET_ID
         val fresh = widgetId == AppWidgetManager.INVALID_APPWIDGET_ID
+        // any app can open this screen with any number: only a widget of Weave's own is picked for
+        if (!fresh && widgets.getAppWidgetInfo(widgetId)?.provider != ComponentName(this, ShortcutsWidgetReceiver::class.java)) {
+            finish()
+            return
+        }
         // backing out of a widget being dropped on the home screen leaves no widget
         if (!fresh) setResult(RESULT_CANCELED, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
         // the widget's own shape, for the picture of it; a new one starts 4 × 2

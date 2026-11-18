@@ -30,6 +30,13 @@ class LinkOneShot @Inject constructor(
     private val session: LinkSession,
 ) {
     suspend fun run(steps: List<LinkStep>): RunOutcome {
+        // The remote's own line, when it has one or is about to: a second line from the same phone
+        // would make the computer drop the first, and let go of whatever it held.
+        var waited = 0
+        while (session.state.value.status in COMING_UP && waited < SESSION_WAIT_MS) {
+            delay(100)
+            waited += 100
+        }
         if (session.state.value.status == LinkStatus.Online) {
             session.runSteps(steps)
             return RunOutcome.Done
@@ -45,7 +52,7 @@ class LinkOneShot @Inject constructor(
                 val out = socket.getOutputStream()
                 send(
                     out,
-                    JSONObject().put("t", "hello").put("token", prefs.token).put("ticket", cfg.ticket)
+                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.host, cfg.port)).put("ticket", cfg.ticket)
                         .put("name", Build.MODEL).put("ver", 3).put("cursor", "laptop").put("quiet", true),
                 )
                 when (val answer = awaitWelcome(DataInputStream(socket.getInputStream().buffered()))) {
@@ -116,6 +123,9 @@ class LinkOneShot @Inject constructor(
     }
 
     companion object {
+        /** While the remote is on its way up, a shortcut waits this long for it before taking a line of its own. */
+        const val SESSION_WAIT_MS = 3_000
+        private val COMING_UP = setOf(LinkStatus.Connecting, LinkStatus.Reconnecting)
         const val CONNECT_MS = 4_000
         const val ANSWER_MS = 6_000
         const val LINGER_MS = 150L

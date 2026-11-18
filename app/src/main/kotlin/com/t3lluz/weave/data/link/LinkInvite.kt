@@ -34,10 +34,13 @@ fun parseInvite(text: String?): LinkInvite? {
     }.toMap()
     val addresses = fields["a"].orEmpty().split(',').map { it.trim() }.filter { ADDRESS.matches(it) }
     val code = fields["c"].orEmpty()
-    if (addresses.isEmpty() || code.isEmpty() || code.length > 64) return null
+    // the code is what the computer made: letters, digits, - and _. Anything else is not one of its
+    if (addresses.isEmpty() || !CODE.matches(code)) return null
     val port = fields["p"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: LinkProtocol.PORT
     return LinkInvite(fields["n"].orEmpty().take(60).ifBlank { addresses.last() }, addresses, port, code)
 }
+
+private val CODE = Regex("^[A-Za-z0-9_-]{1,64}$")
 
 /** A host name or an IPv4 address: nothing with a slash, a space or a scheme gets through. */
 private val ADDRESS = Regex("^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
@@ -97,15 +100,27 @@ suspend fun findOnNetwork(waitMs: Int = 700): List<LinkHost> = withContext(Dispa
 }
 
 /**
- * The dashboard's list and the network's own, as one: a computer in both is one entry, reached
- * by its local address first (the shorter way) and let in by the dashboard's ticket.
+ * The computers this phone knows, with the ones the network just answered for. An answer is
+ * tied to a known computer only by its address: a name is whatever the sender says it is, and
+ * a stranger on the Wi-Fi answering to a computer's name must never be taken for it. Anything
+ * else found is its own entry, connected to only when tapped, with a token of its own.
  */
 internal fun mergeFound(listed: List<LinkHost>, found: List<LinkHost>): List<LinkHost> {
     val out = listed.toMutableList()
     for (f in found) {
-        val at = out.indexOfFirst { it.name.equals(f.name, ignoreCase = true) }
+        val at = out.indexOfFirst { h -> f.addresses.any { it in h.addresses } && h.port == f.port }
         if (at < 0) out += f
-        else out[at] = out[at].copy(addresses = (f.addresses + out[at].addresses).distinct(), online = true, busy = out[at].busy || f.busy)
+        else out[at] = out[at].copy(online = true, busy = out[at].busy || f.busy)
     }
     return out
+}
+
+/** Whether anything answers at one of [addresses]: a known computer that is on, wherever it is. */
+internal suspend fun answers(addresses: List<String>, port: Int, waitMs: Int = 700): Boolean = withContext(Dispatchers.IO) {
+    addresses.any { address ->
+        runCatching {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress(address, port), waitMs) }
+            true
+        }.getOrDefault(false)
+    }
 }

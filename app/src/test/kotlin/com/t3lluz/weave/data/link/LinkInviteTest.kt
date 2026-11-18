@@ -49,16 +49,46 @@ class LinkInviteTest {
     }
 
     @Test
-    fun aComputerFoundOnTheNetworkJoinsItsDashboardEntry() {
-        val listed = listOf(LinkHost("id1", "t3lluz", listOf("100.74.84.100", "t3lluz"), 47600, "ticket", online = true, busy = false))
+    fun anAnswerFromTheNetworkIsTiedToAKnownComputerOnlyByItsAddress() {
+        val mine = listOf(LinkHost("known", "t3lluz", listOf("192.168.1.23", "100.74.84.100", "t3lluz"), 47600, "ticket", online = false, busy = false))
         val found = listOf(
-            LinkHost("lan:192.168.1.23", "T3lluz", listOf("192.168.1.23"), 47600, "", online = true, busy = false),
-            LinkHost("lan:192.168.1.40", "desk", listOf("192.168.1.40"), 47600, "", online = true, busy = true),
+            // the computer itself, answering from its own address
+            LinkHost("lan:192.168.1.23", "t3lluz", listOf("192.168.1.23"), 47600, "", online = true, busy = true),
+            // a stranger on the Wi-Fi, answering to its name
+            LinkHost("lan:192.168.1.66", "t3lluz", listOf("192.168.1.66"), 47600, "", online = true, busy = false),
         )
-        val merged = mergeFound(listed, found)
-        assertEquals(listOf("t3lluz", "desk"), merged.map { it.name })
-        assertEquals(listOf("192.168.1.23", "100.74.84.100", "t3lluz"), merged[0].addresses)
+        val merged = mergeFound(mine, found)
+        assertEquals(2, merged.size)
+        assertEquals("its addresses are untouched", listOf("192.168.1.23", "100.74.84.100", "t3lluz"), merged[0].addresses)
         assertEquals("ticket", merged[0].ticket)
-        assertTrue(merged[1].busy)
+        assertTrue(merged[0].online && merged[0].busy)
+        assertEquals("the stranger is an entry of its own", listOf("192.168.1.66"), merged[1].addresses)
+        assertEquals("", merged[1].ticket)
+    }
+
+    @Test
+    fun theSameAddressOnAnotherPortIsAnotherComputer() {
+        val mine = listOf(LinkHost("known", "box", listOf("192.168.1.23"), 47600, "", online = false, busy = false))
+        val found = listOf(LinkHost("lan:192.168.1.23", "box", listOf("192.168.1.23"), 5000, "", online = true, busy = false))
+        assertEquals(2, mergeFound(mine, found).size)
+    }
+
+    @Test
+    fun eachComputerGetsATokenOfItsOwn() {
+        val home = deriveToken("secret", "192.168.1.23,100.74.84.100,t3lluz", 47600)
+        assertEquals("the same computer, its addresses in any order or case", home, deriveToken("secret", " T3lluz, 100.74.84.100 ,192.168.1.23", 47600))
+        assertTrue(home.length >= 32)
+        // what a link pointing somewhere else would be sent opens nothing at home
+        assertFalse(home == deriveToken("secret", "evil.example", 47600))
+        assertFalse(home == deriveToken("secret", "192.168.1.23,100.74.84.100,t3lluz", 5000))
+        assertFalse("and another phone's is another", home == deriveToken("other", "192.168.1.23,100.74.84.100,t3lluz", 47600))
+        assertFalse("the phone's own secret is never the token", home.contains("secret"))
+    }
+
+    @Test
+    fun anInvitationCarriesNothingThatCouldBecomePartOfAnotherLink() {
+        // a second "#Intent;...;end" hidden in a field would hijack the page's hand-over to the app
+        assertNull(parseInvite("https://t3lluz.com/weave/pair#a=1.2.3.4&c=x#Intent;scheme=other;end"))
+        assertNull(parseInvite("weave://pair?a=1.2.3.4&c=ab;cd"))
     }
 }

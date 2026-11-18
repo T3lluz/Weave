@@ -4,10 +4,11 @@ pairing question, the lock, whether a text field has the focus, and the network 
 import asyncio
 import ctypes
 import ipaddress
+import threading
 import time
 
 from ..proc import run
-from . import api, screen
+from . import api, helpers, screen
 
 PLATFORM = "windows"
 # what this computer can do beyond the first version, for the phone to offer
@@ -71,8 +72,7 @@ async def clip_set(text: str):
     await asyncio.to_thread(_clip_set, text)
 
 
-def _ps_quote(text: str) -> str:
-    return "'" + text.replace("'", "''") + "'"
+_ps_quote = helpers.ps_quote
 
 
 def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):
@@ -85,9 +85,11 @@ def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):
 
 
 def _ask(title: str, body: str, timeout: float) -> bool | None:
-    # yes/no, a question mark, and over every other window (system modal is what keeps a box from
-    # a background program on top: without it the question opens behind whatever is in front)
-    flags = 0x4 | 0x20 | 0x1000 | 0x10000 | 0x40000
+    # Yes/no with No as the button Enter presses (the box takes the focus from whatever the owner
+    # was typing into: a stray Enter must turn the phone away, not let it in), a question mark,
+    # and over every other window (system modal is what keeps a box from a background program on
+    # top: without it the question opens behind whatever is in front).
+    flags = 0x4 | 0x100 | 0x20 | 0x1000 | 0x10000 | 0x40000
     try:
         # the sentence goes in the box, not its title: Windows cuts a long title off
         text = f"{title}.\n\n{body}\n\nYes lets it in. No turns it away."
@@ -97,9 +99,26 @@ def _ask(title: str, body: str, timeout: float) -> bool | None:
     return True if answer == 6 else False if answer == 7 else None
 
 
+_asking = asyncio.Lock()
+
+
 async def ask(title: str, body: str, timeout: float) -> bool | None:
-    """A question with Yes and No on it: the answer, or None when nobody gave one."""
-    return await asyncio.to_thread(_ask, title, body, timeout)
+    """A question with Yes and No on it: the answer, or None when nobody gave one. One box at a
+    time, each on a thread of its own: a box waits up to two minutes, and the shared pool of
+    threads is what the clipboard runs on."""
+    async with _asking:
+        loop = asyncio.get_running_loop()
+        done = loop.create_future()
+
+        def work():
+            try:
+                result = _ask(title, body, timeout)
+            except Exception:
+                result = None
+            loop.call_soon_threadsafe(lambda: done.done() or done.set_result(result))
+
+        threading.Thread(target=work, daemon=True).start()
+        return await done
 
 
 async def lock():

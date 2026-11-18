@@ -88,6 +88,13 @@ import com.t3lluz.weave.ui.theme.LinkScreenTone
 import com.t3lluz.weave.ui.theme.LinkSoundTone
 import com.t3lluz.weave.ui.theme.AppMotion
 import com.t3lluz.weave.ui.theme.Surface
+import androidx.compose.ui.text.font.FontFamily
+import com.t3lluz.weave.ui.theme.TextTertiary
+import com.t3lluz.weave.ui.theme.TextPrimary
+import com.t3lluz.weave.ui.components.PillButton
+import com.t3lluz.weave.ui.screens.health.HealthDisplay
+import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Text
 import com.t3lluz.weave.ui.theme.TextSecondary
 import com.t3lluz.weave.ui.util.LaunchedWhileResumed
 import com.t3lluz.weave.ui.util.findActivity
@@ -353,13 +360,13 @@ fun LinkScreen(
                 !connected -> LinkFinder(
                     state = state, config = config, laptops = laptops,
                     onPick = viewModel::connectTo, onAddress = viewModel::connectTo,
-                    onRetry = { session.reconnect() }, onForget = viewModel::disconnect,
+                    onRetry = { session.reconnect() }, onForget = viewModel::forget,
                     onSettings = onSettings,
                     onWake = {
                         viewModel.wake()
                         toast = "Waking $laptopName. Give it a few seconds."
                     },
-                    onScan = { scanInvite(context, viewModel::pair) { toast = it } },
+                    onScan = { scanInvite(context, viewModel::offer) { toast = it } },
                 )
                 landscape -> Sideways(
                     viewModel = viewModel, state = state, config = config, geometry = geometry, hazeState = hazeState,
@@ -387,6 +394,10 @@ fun LinkScreen(
             modifier = Modifier.size(1.dp).alpha(0f),
         )
         LinkToast(toast, hazeState, Modifier.align(Alignment.TopCenter))
+        // A code was scanned or a link opened: nothing connects until the owner says so.
+        viewModel.offered?.let { invite ->
+            PairQuestion(invite, onPair = viewModel::acceptOffer, onDismiss = viewModel::declineOffer)
+        }
     }
 
     if (sheet && online) {
@@ -733,4 +744,33 @@ private fun FadingPicture(visible: Boolean, content: @Composable () -> Unit) {
         exit = fadeOut(AppMotion.fadeTween()),
         modifier = Modifier.fillMaxSize(),
     ) { content() }
+}
+
+/**
+ * "Pair with this computer?", before anything is sent to it. A link can come from anywhere (a web
+ * page can open one), so the owner sees the name it claims and the address it would connect to.
+ */
+@Composable
+private fun PairQuestion(invite: com.t3lluz.weave.data.link.LinkInvite, onPair: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Surface,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+        title = { Text("Pair with ${invite.name}?", style = HealthDisplay, fontSize = 22.sp) },
+        text = {
+            Column {
+                Text("This phone will connect to it and be able to see and control it.", fontSize = 14.sp, lineHeight = 20.sp)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    invite.addresses.take(3).joinToString("\n") + if (invite.addresses.size > 3) "\nand ${invite.addresses.size - 3} more" else "",
+                    fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp, color = TextPrimary,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("Only pair with a code from your own computer's screen.", fontSize = 13.sp, lineHeight = 18.sp, color = TextTertiary)
+            }
+        },
+        confirmButton = { PillButton(icon = AppIcons.Check, label = "Pair", accent = LinkScreenTone, emphasized = true, onClick = onPair) },
+        dismissButton = { PillButton(icon = AppIcons.Close, label = "Not now", accent = TextSecondary, onClick = onDismiss) },
+    )
 }

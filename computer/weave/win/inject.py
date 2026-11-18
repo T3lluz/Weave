@@ -7,9 +7,9 @@ lands exactly (a gain of 1).
 
 Text is typed with the keys the PC's own layout has for each character, as a keyboard would.
 What the layout can't type (an emoji, a letter of another alphabet) goes as the character
-itself. Either way it is typed at a typist's pace, not in one burst: programs that take their
-keys in the background (Windows 11's Notepad is one) read Shift late and blur a burst of
-characters together. Keys and text share one queue, so a backspace never overtakes the word
+itself. Either way the program in front sets the pace: programs that take their keys in the
+background (Windows 11's Notepad is one) read Shift late and blur a burst of characters
+together, so the typing waits for each one that matters to be taken (_caught_up). Keys and text share one queue, so a backspace never overtakes the word
 before it.
 """
 
@@ -42,11 +42,16 @@ VK = {
     **{f"f{n}": (0x6F + n, False) for n in range(1, 13)},
 }
 MODS = ("ctrl", "shift", "alt", "super", "altgr")
-# Between two characters of typed text, in seconds. Programs that take their keys in the
-# background read Shift, and characters sent as themselves, a moment after they arrive: typed in
-# one burst, a capital loses its Shift and such characters blur into the last one. A fast typist's
-# pace is safe for all of them.
-TYPING_PACE = 0.012
+# Between two characters of typed text, in seconds: a fast typist's pace, so no program is handed
+# a whole sentence in one burst. What needs more than a pause (Shift held until its key is taken,
+# a character sent as itself worked out before the next) waits for the program itself: _caught_up.
+TYPING_PACE = 0.006
+# after a character sent as itself, on top of waiting for the program
+PACKET_PACE = 0.012
+# Shift goes down this long before its key, and stays this long after the last one it is for
+MOD_LEAD, MOD_HOLD = 0.004, 0.02
+# how long a program gets to answer before it is typed at regardless
+CATCH_UP_MS = 150
 
 
 def key_vk(name: str) -> tuple[int, bool] | None:
@@ -54,10 +59,12 @@ def key_vk(name: str) -> tuple[int, bool] | None:
     return VK.get(name)
 
 
-def layout_stroke(scan: int) -> tuple[int, bool, bool] | None:
+def layout_stroke(scan: int, dead: bool = False) -> tuple[int, bool, bool] | None:
     """What VkKeyScanEx says about a character, as (key, with shift, with AltGr); None when the
-    layout has no key for it, or only one that needs some other chord."""
-    if scan == -1:
+    layout has no key for it, only one that needs some other chord, or a dead key ([dead]: on a
+    Norwegian or German layout ^ ~ ` and their like wait for the next letter to land on, so
+    pressing one types nothing, or the wrong thing with what follows)."""
+    if scan == -1 or dead:
         return None
     vk, state = scan & 0xFF, (scan >> 8) & 0xFF
     if state in (0, 1):
@@ -85,7 +92,9 @@ class Injector:
         self._held: set[tuple[str, object]] = set()
         self._presses: dict[str, int] = {}
         self._queue: asyncio.Queue = asyncio.Queue()
+        self._typing = False          # a key or a text is on its way out right now
         self.pace = float(os.environ.get("WEAVE_TYPING_PACE", TYPING_PACE))
+        self.packet_pace = PACKET_PACE
         self._typist = asyncio.get_running_loop().create_task(self._type())
 
     # ── out ──
@@ -174,12 +183,15 @@ class Injector:
         while True:
             job = await self._queue.get()
             try:
+                self._typing = True
                 if job[0] == "key":
                     self._key_now(*job[1:])
                 else:
                     await self._text_now(job[1])
             except Exception as err:   # one bad key must not end the typing
                 print(f"weave: typing: {err!r}")
+            finally:
+                self._typing = False
 
     def _key_now(self, name: str, mods, down):
         spec = key_vk(name)
@@ -194,6 +206,26 @@ class Injector:
         self._send(*[self._key(v, False, e) for v, e in held], self._key(vk, False, extended), self._key(vk, True, extended),
                    *[self._key(v, True, e) for v, e in reversed(held)])
 
+    def _caught_up(self, rounds: int = 3):
+        """Waits until the program in front has been round its message loop [rounds] times: by
+        then it has taken the key just sent and worked out its character. A message sent to a
+        window is answered the next time its program asks for messages, and it asks once per
+        key it handles, so each answer is one step through its queue. This is what keeps typing
+        right at any speed: a program that is slow (or a PC that is busy) is simply waited for,
+        where a fixed pause would be too short for it. One that doesn't answer is not waited on
+        for long."""
+        thread = api.user32.GetWindowThreadProcessId(api.user32.GetForegroundWindow(), None)
+        info = api.GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(info)
+        window = info.hwndFocus if thread and api.user32.GetGUIThreadInfo(thread, ctypes.byref(info)) and info.hwndFocus else api.user32.GetForegroundWindow()
+        if not window:
+            return
+        answer = api.ULONG_PTR()
+        for _ in range(rounds):
+            # WM_NULL: asks nothing of the program but to answer; abort if it is hung
+            if not api.user32.SendMessageTimeoutW(window, 0, 0, 0, 0x0002, CATCH_UP_MS, ctypes.byref(answer)):
+                return
+
     def _layout(self):
         """The keyboard layout of whatever has the focus: that is the one its keys are read by."""
         thread = api.user32.GetWindowThreadProcessId(api.user32.GetForegroundWindow(), None)
@@ -201,33 +233,65 @@ class Injector:
 
     async def _text_now(self, value: str):
         layout = self._layout()
-        for ch in value:
-            if ch == "\n":
-                self._send(self._key(0x0D, False), self._key(0x0D, True))
+        held: list[int] = []   # Shift (or AltGr's two keys) down right now, for the characters being typed
+
+        async def hold(mods: list[int]):
+            """Changes which modifiers are down. One held is let go only after the program has
+            had a moment with it past its last key: a program that looks at Shift late (the new
+            Notepad does) must still find it down. It stays down across a run of capitals."""
+            nonlocal held
+            if mods == held:
+                return
+            if held:
+                await asyncio.to_thread(self._caught_up)
+                await asyncio.sleep(MOD_HOLD)
+                self._send(*[self._key(m, True) for m in reversed(held)])
+            held = []
+            if mods:
+                self._send(*[self._key(m, False) for m in mods])
+                held = mods
+                await asyncio.sleep(MOD_LEAD)
+
+        try:
+            for ch in value:
+                if ch == "\n":
+                    await hold([])
+                    self._send(self._key(0x0D, False), self._key(0x0D, True))
+                    await asyncio.sleep(self.pace)
+                    continue
+                stroke = None
+                if len(ch.encode("utf-16-le")) == 2:
+                    scan = api.user32.VkKeyScanExW(ch, layout)
+                    # the high bit of the key's character says it is a dead key on this layout
+                    dead = scan != -1 and bool(api.user32.MapVirtualKeyExW(scan & 0xFF, 2, layout) & 0x80000000)
+                    stroke = layout_stroke(scan, dead)
+                if stroke:
+                    vk, shift, altgr = stroke
+                    await hold([v for v, on in ((0xA0, shift), (0xA2, altgr), (0xA4, altgr)) if on])
+                    self._send(self._key(vk, False), self._key(vk, True))
+                else:
+                    # no key for it: the character itself (both halves of one past the first 65536
+                    # together). The program must have worked it out before the next one arrives,
+                    # or it takes both for the later one.
+                    await hold([])
+                    data = ch.encode("utf-16-le")
+                    units = [int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data), 2)]
+                    self._send(*[self._key(0, False, scan=u, unicode=True) for u in units], *[self._key(0, True, scan=u, unicode=True) for u in units])
+                    await asyncio.to_thread(self._caught_up)
+                    await asyncio.sleep(self.packet_pace)
                 await asyncio.sleep(self.pace)
-                continue
-            stroke = layout_stroke(api.user32.VkKeyScanExW(ch, layout)) if len(ch.encode("utf-16-le")) == 2 else None
-            if stroke:
-                vk, shift, altgr = stroke
-                mods = [v for v, on in ((0xA0, shift), (0xA2, altgr), (0xA4, altgr)) if on]
-                if mods:
-                    # held a moment before the key and a moment after, as a hand holds it: a
-                    # program that looks at Shift late must still find it down
-                    self._send(*[self._key(m, False) for m in mods])
-                    await asyncio.sleep(self.pace / 2)
-                self._send(self._key(vk, False), self._key(vk, True))
-                if mods:
-                    await asyncio.sleep(self.pace / 2)
-                    self._send(*[self._key(m, True) for m in reversed(mods)])
-            else:
-                # no key for it: the character itself (both halves of one past the first 65536 together)
-                data = ch.encode("utf-16-le")
-                units = [int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data), 2)]
-                self._send(*[self._key(0, False, scan=u, unicode=True) for u in units], *[self._key(0, True, scan=u, unicode=True) for u in units])
-            await asyncio.sleep(self.pace)
+            await hold([])
+        finally:
+            # let go whatever happened in between (typing can be cut off mid-word when a phone
+            # drops): a Shift left down would turn the next person's keys into commands
+            if held:
+                self._send(*[self._key(m, True) for m in reversed(held)])
 
     def release_all(self):
-        """Lets go of whatever a dropped connection left held."""
+        """Lets go of whatever a dropped connection left held, and drops what it had still to type:
+        the rest of its sentence must not come out under the next phone's fingers."""
+        while not self._queue.empty():
+            self._queue.get_nowait()
         for kind, name in list(self._held):
             if kind == "button":
                 self._send(self._mouse(BUTTONS[name][1], data=BUTTONS[name][2]))

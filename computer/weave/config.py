@@ -14,7 +14,10 @@ else:
     CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "weave"
     STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "weave"
     DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "weave"
-    RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+    # The socket of the `weave` command lives here. Without a runtime directory of the user's own
+    # (a shell started some odd way), the state directory, which only they can write: in /tmp any
+    # other user could put a socket of theirs where the command looks.
+    RUNTIME_DIR = Path(os.environ["XDG_RUNTIME_DIR"]) if os.environ.get("XDG_RUNTIME_DIR") else STATE_DIR
 SOCKET = RUNTIME_DIR / "weave.sock"
 
 DEFAULTS = {

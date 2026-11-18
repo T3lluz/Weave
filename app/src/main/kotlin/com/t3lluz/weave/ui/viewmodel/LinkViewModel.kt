@@ -72,11 +72,15 @@ class LinkViewModel @Inject constructor(
         looking = viewModelScope.launch {
             val found = directory.laptops()
             _laptops.value = found
-            // the laptop restarted with a new ticket, or moved: keep what is saved in step with the list
+            // The dashboard says the saved computer restarted with a new ticket, or moved: keep what is
+            // saved in step. Only the dashboard may: it is asked over HTTPS at an address the owner
+            // set. What the network answered is never written over a saved computer, and a ticket is
+            // never traded for none (a code just scanned would be lost before it was used).
             val saved = prefs.config.value
-            found.hosts.firstOrNull { it.name == saved.name && saved.name.isNotBlank() }?.let { h ->
+            found.hosts.firstOrNull { it.fromDashboard && it.name == saved.name && saved.name.isNotBlank() }?.let { h ->
                 val addresses = h.addresses.joinToString(",")
-                if (saved.ticket != h.ticket || saved.host != addresses) prefs.update { it.copy(host = addresses, port = h.port, ticket = h.ticket) }
+                val ticket = h.ticket.ifBlank { saved.ticket }
+                if (saved.ticket != ticket || saved.host != addresses) prefs.update { it.copy(host = addresses, port = h.port, ticket = ticket) }
             }
         }
     }
@@ -88,6 +92,13 @@ class LinkViewModel @Inject constructor(
     }
 
     /** Back to the list, with nothing picked. */
+    /** The picked computer is taken off this phone's list of its own, and let go of. */
+    fun forget() {
+        val cfg = prefs.config.value
+        prefs.forget(cfg.host, cfg.port)
+        disconnect()
+    }
+
     fun disconnect() {
         shortcutSheet = null
         prefs.update { it.copy(host = "", name = "", ticket = "") }
@@ -120,8 +131,30 @@ class LinkViewModel @Inject constructor(
     fun stop() = session.stop()
 
     /** By hand, for a laptop the dashboard doesn't list. The laptop asks its owner the first time. */
-    /** A computer's code was scanned, or its link opened: connect, and the code lets this phone in. */
-    fun pair(invite: com.t3lluz.weave.data.link.LinkInvite) {
+    /**
+     * An invitation that arrived (a scanned code, an opened link), waiting for the owner's yes.
+     * Nothing connects on a link's word alone: any web page can open one, and pairing sends this
+     * phone's token for that computer to wherever the link says.
+     */
+    var offered by mutableStateOf<com.t3lluz.weave.data.link.LinkInvite?>(null)
+        private set
+
+    fun offer(invite: com.t3lluz.weave.data.link.LinkInvite) {
+        offered = invite
+    }
+
+    fun declineOffer() {
+        offered = null
+    }
+
+    /** The owner said yes to [offered]: connect, and its code lets this phone in. */
+    fun acceptOffer() {
+        val invite = offered ?: return
+        offered = null
+        pair(invite)
+    }
+
+    private fun pair(invite: com.t3lluz.weave.data.link.LinkInvite) {
         shortcutSheet = null
         prefs.update { it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code) }
         session.reconnect()

@@ -122,11 +122,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /** The update notification: its tap opens the sheet, its Update action starts the update too. */
-    /** A computer's pairing link (weave://pair?...) opened Weave: connect to it with its code. */
+    /** A computer's pairing link (weave://pair?...) opened Weave: the remote asks whether to pair with it. */
     private fun consumePairIntent(intent: Intent?) {
         val invite = parseInvite(intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString) ?: return
-        intent?.data = null   // once: a rotation must not pair again with a code that is spent
-        link.pair(invite)
+        intent?.data = null   // once: a rotation must not ask again
+        link.offer(invite)
     }
 
     private fun consumeUpdateIntent(intent: Intent?) {

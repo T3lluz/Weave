@@ -5,7 +5,9 @@ import unittest
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
-from weave import discovery, pairing
+from types import SimpleNamespace
+
+from weave import discovery, pairing, server
 
 
 class Codes(unittest.TestCase):
@@ -85,6 +87,144 @@ class Found(unittest.IsolatedAsyncioTestCase):
             await loop.sock_sendto(phone, discovery.ASK, ("127.0.0.1", port))
             with self.assertRaises(asyncio.TimeoutError):
                 await asyncio.wait_for(loop.sock_recv(phone, 2048), 0.2)
+
+
+class Line:
+    """What a phone's connection looks like to a session: where it comes from, and what it was sent."""
+
+    def __init__(self, peer="192.168.1.50"):
+        self.peer, self.sent = peer, []
+        self.transport = SimpleNamespace(get_write_buffer_size=lambda: 0)
+
+    def get_extra_info(self, _):
+        return (self.peer, 1)
+
+    def write(self, b):
+        self.sent.append(json.loads(b[5:]))
+
+    def close(self):
+        pass
+
+    def kinds(self):
+        return [m["t"] for m in self.sent]
+
+
+class LettingIn(unittest.IsolatedAsyncioTestCase):
+    """The daemon's own admit(), with a computer around it that is all stand-ins."""
+
+    def setUp(self):
+        async def nothing(*_a, **_k):
+            return None
+
+        async def no_monitors():
+            return []
+
+        self.asked = []
+
+        async def ask(key, session, answer):
+            self.asked.append(session.name)
+
+        self.d = SimpleNamespace(
+            devices=SimpleNamespace(data={}, save=lambda: None), dashboard=SimpleNamespace(secret="dash-secret", poke=lambda: None),
+            codes=pairing.Codes(), pending={}, sessions=set(), host="box", cfg={"remote": {"sound": False, "notify": False}, "port": 47600},
+            log=lambda *_: None, replace_sessions=lambda key: None, ensure_injector=lambda: object(), state=lambda: {},
+            phone=SimpleNamespace(hints=[]), _ask=ask)
+        for target, name, fake in ((server.hypr, "monitors", no_monitors), (server.hypr, "pointer_gain", nothing), (server.shell, "wake_info", nothing)):
+            patch = mock.patch.object(target, name, fake)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def phone(self, peer="192.168.1.50"):
+        line = Line(peer)
+        return server.Session(self.d, None, line), line
+
+    async def hello(self, session, token, ticket="", name="Pixel", **more):
+        return await server.Daemon.admit(self.d, session, {"t": "hello", "token": token, "ticket": ticket, "name": name, **more})
+
+    async def test_a_code_lets_one_phone_in_once_and_the_next_is_asked_about(self):
+        code = self.d.codes.new()
+        s, line = self.phone()
+        self.assertTrue(await self.hello(s, "a" * 32, code))
+        self.assertEqual(line.kinds(), ["welcome"])
+        self.assertEqual(self.d.codes.used[code], "Pixel")
+        self.assertEqual(self.asked, [], "nobody was asked: the code was the yes")
+        # the same code from another phone: spent, so the owner is asked
+        s2, line2 = self.phone("192.168.1.51")
+        waiting = asyncio.create_task(self.hello(s2, "b" * 32, code, name="Other"))
+        await asyncio.sleep(0.01)
+        self.assertEqual(line2.kinds(), ["pending"])
+        self.assertEqual(self.asked, ["Other"])
+        server.Daemon.decide(self.d, False)
+        self.assertFalse(await waiting)
+        self.assertEqual(line2.kinds(), ["pending", "denied"])
+
+    async def test_a_paired_phone_comes_back_without_a_code_and_a_wrong_one_does_no_harm(self):
+        s, _ = self.phone()
+        await self.hello(s, "a" * 32, self.d.codes.new())
+        again, line = self.phone()
+        self.assertTrue(await self.hello(again, "a" * 32, "not-a-code"))
+        self.assertEqual(line.kinds(), ["welcome"])
+
+    async def test_a_ticket_that_is_not_plain_text_is_just_a_wrong_ticket(self):
+        self.d.codes.new()
+        s, line = self.phone()
+        waiting = asyncio.create_task(self.hello(s, "a" * 32, "kød\u2713\U0001f600"))
+        await asyncio.sleep(0.01)
+        self.assertEqual(line.kinds(), ["pending"], "asked about, not crashed on")
+        server.Daemon.decide(self.d, False)
+        await waiting
+
+    async def test_one_phone_waits_per_address_and_only_a_few_in_all(self):
+        waiting, lines = [], []
+        for i in range(server.PENDING_MOST):
+            s, line = self.phone(f"192.168.1.{60 + i}")
+            waiting.append(asyncio.create_task(self.hello(s, chr(97 + i) * 32, name=f"Phone {i}")))
+            lines.append(line)
+        await asyncio.sleep(0.01)
+        self.assertTrue(all(line.kinds() == ["pending"] for line in lines))
+        # a second from an address that already has one waiting, and one more than the limit
+        same, same_line = self.phone("192.168.1.60")
+        self.assertFalse(await self.hello(same, "x" * 32))
+        more, more_line = self.phone("192.168.1.99")
+        self.assertFalse(await self.hello(more, "y" * 32))
+        self.assertEqual(same_line.kinds(), ["denied"])
+        self.assertEqual(more_line.kinds(), ["denied"])
+        self.assertEqual(len(self.asked), server.PENDING_MOST, "no question was raised for the ones turned away")
+        server.Daemon.decide(self.d, False)
+        await asyncio.gather(*waiting)
+
+    async def test_yes_with_two_waiting_needs_a_name(self):
+        mine, mine_line = self.phone("192.168.1.50")
+        theirs, theirs_line = self.phone("192.168.1.66")
+        a = asyncio.create_task(self.hello(mine, "a" * 32, name="My Pixel"))
+        b = asyncio.create_task(self.hello(theirs, "b" * 32, name="Stranger"))
+        await asyncio.sleep(0.01)
+        said = server.Daemon.decide(self.d, True)
+        self.assertIn("more than one is waiting", said)
+        self.assertIn("My Pixel (192.168.1.50)", said)
+        self.assertEqual(mine_line.kinds(), ["pending"], "nobody was let in")
+        self.assertEqual(server.Daemon.decide(self.d, True, "My Pixel"), "let in My Pixel from 192.168.1.50")
+        self.assertTrue(await a)
+        self.assertEqual(theirs_line.kinds(), ["pending"], "the other one still waits")
+        self.assertEqual(server.Daemon.decide(self.d, False), "turned away Stranger from 192.168.1.66")
+        self.assertFalse(await b)
+        self.assertEqual(server.Daemon.decide(self.d, True), "nothing is waiting")
+
+    async def test_a_quiet_line_runs_a_shortcuts_steps_and_nothing_else(self):
+        s, line = self.phone()
+        await self.hello(s, "a" * 32, self.d.codes.new(), quiet=True)
+        self.assertTrue(s.quiet)
+        pressed = []
+        self.d.injector = SimpleNamespace(key=lambda *a: pressed.append(a), move=lambda *a: pressed.append(("moved", a)))
+        with mock.patch.object(server.catalog, "bound_code", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(server.shell, "clip_get", mock.AsyncMock(return_value="the owner's clipboard")):
+            await s.handle({"t": "key", "key": "a", "mods": []})
+            await s.handle({"t": "m", "dx": 5, "dy": 5})
+            await s.handle({"t": "clip_get"})
+            await s.handle({"t": "video", "on": True})
+        self.assertEqual(pressed, [("a", (), None)], "the key went through; the pointer move did not")
+        self.assertNotIn("clip", line.kinds())
+        self.assertFalse(s.video_wanted)
 
 
 if __name__ == "__main__":

@@ -40,12 +40,15 @@ main() {
   cp -a "$repo/site" "$stage"
   cp "$repo/computer/install.sh" "$repo/computer/install.ps1" "$stage/public/"
   echo "$new" >"$stage/version.txt"
+  # cp -a keeps the repo folder's own date: stamp the build with now, so "newest" means newest
+  touch "$stage"
   mv "$stage" "$build/site-$sha"
   ln -sfn "site-$sha" "$build/.current.tmp"
   mv -T "$build/.current.tmp" "$build/current"
 
-  # Keep the three newest builds; older ones only take space.
-  ls -1dt "$build"/site-* | tail -n +4 | xargs -r rm -rf
+  # Keep the three newest builds; older ones only take space. Never the one just
+  # switched to, whatever the dates say.
+  ls -1dt "$build"/site-* | tail -n +4 | grep -v -x -F "$build/site-$sha" | xargs -r rm -rf
 
   # Recreates the container only if compose.yml changed. Then restart it
   # either way: its working directory is the build it started on.

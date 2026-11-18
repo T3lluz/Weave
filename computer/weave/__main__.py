@@ -14,7 +14,7 @@ from .local import ask
 USAGE = """\
 weave pair                        show a code for a phone to scan, and let that phone in
 weave status                      what is connected and running
-weave allow | deny                answer a phone that is waiting to pair
+weave allow [NAME] | deny         answer a phone that is waiting to pair
 weave forget [NAME]               unpair a phone, or all of them
 weave clip                        send this clipboard to the phone (the remote must be open there)
 weave audio [on|off|toggle]       the phone's sound on this computer's output (Linux)
@@ -133,7 +133,7 @@ def main() -> int:
     if cmd == "clip":
         return say("Phone", ask({"cmd": "clip"}), opts.notify)
     if cmd in ("allow", "deny"):
-        return say("Weave", ask({"cmd": cmd}), opts.notify)
+        return say("Weave", ask({"cmd": cmd, "name": " ".join(args) or None}), opts.notify)
     if cmd == "forget":
         return say("Weave", ask({"cmd": "forget", "name": args[0] if args else None}), opts.notify)
     if cmd == "status":

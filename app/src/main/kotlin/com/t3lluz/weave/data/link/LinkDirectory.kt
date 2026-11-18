@@ -28,6 +28,8 @@ data class LinkHost(
     val online: Boolean,
     /** A phone is controlling it right now. */
     val busy: Boolean,
+    /** The dashboard listed it (as opposed to this phone remembering it, or the network answering). */
+    val fromDashboard: Boolean = false,
 )
 
 data class LinkDirectoryState(
@@ -48,6 +50,7 @@ data class LinkDirectoryState(
 class LinkDirectory @Inject constructor(
     okHttpClient: OkHttpClient,
     private val settings: SettingsRepository,
+    private val prefs: LinkPrefs,
 ) {
     internal val client = okHttpClient.newBuilder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -55,11 +58,23 @@ class LinkDirectory @Inject constructor(
         .apply { interceptors().removeAll { it is okhttp3.logging.HttpLoggingInterceptor } }
         .build()
 
-    /** Every computer this phone can see: the ones on its own network, and the dashboard's when one is set. */
+    /**
+     * Every computer this phone can reach: the ones it has been let into before (on, when one of
+     * their addresses answers), the ones on its own network, and the dashboard's when one is set.
+     */
     suspend fun laptops(): LinkDirectoryState = coroutineScope {
         val near = async { findOnNetwork() }
+        val mine = prefs.known.value.map { k ->
+            async {
+                val addresses = k.host.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                LinkHost(id = "known:${k.host}:${k.port}", name = k.name, addresses = addresses, port = k.port, ticket = k.ticket,
+                    online = answers(addresses, k.port), busy = false)
+            }
+        }
         val listed = fromDashboard()
-        val hosts = mergeFound(listed.hosts, near.await())
+        // a known computer the dashboard lists too is one entry: the dashboard's, which knows its ticket
+        val known = mine.map { it.await() }.filterNot { k -> listed.hosts.any { d -> d.addresses.any { it in k.addresses } } }
+        val hosts = mergeFound(known + listed.hosts, near.await())
         // a dashboard that didn't answer is only worth saying when nothing was found without it
         LinkDirectoryState(hosts = hosts, loaded = true, problem = listed.problem.takeIf { hosts.isEmpty() })
     }
@@ -113,7 +128,7 @@ internal fun parseLaptops(o: JSONObject, mine: Set<String> = emptySet()): List<L
             LinkHost(
                 id = h.optString("id"), name = h.optString("name").ifBlank { addresses.last() },
                 addresses = addresses, port = h.optInt("port", LinkProtocol.PORT),
-                ticket = h.optString("ticket"), online = h.optBoolean("online"), busy = busy,
+                ticket = h.optString("ticket"), online = h.optBoolean("online"), busy = busy, fromDashboard = true,
             ),
         )
     }

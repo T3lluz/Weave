@@ -74,7 +74,7 @@ class LinkLogicTest {
             ),
         )
         assertEquals(2, hosts.size)
-        assertEquals(LinkHost("ab12", "t3lluz", listOf("100.118.105.88", "t3lluz"), 47600, "secret", online = true, busy = true), hosts[0])
+        assertEquals(LinkHost("ab12", "t3lluz", listOf("100.118.105.88", "t3lluz"), 47600, "secret", online = true, busy = true, fromDashboard = true), hosts[0])
         // a laptop that sent no name goes by its address, and the port falls back to tandem's own
         assertEquals("otherbox", hosts[1].name)
         assertEquals(LinkProtocol.PORT, hosts[1].port)

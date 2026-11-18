@@ -30,9 +30,13 @@ fi
 command -v python3 >/dev/null || { echo "weave needs python3"; exit 1; }
 mkdir -p "$bin" "$data/icons/hicolor/scalable/apps" "$units"
 
+# the path goes in single quotes, any quote in it closed and opened again: a home folder with a
+# space, a quote or a dollar sign in its name must not change what the launcher runs
+quoted=$(printf '%s' "$code" | sed "s/'/'\\\\''/g")
 cat > "$bin/weave" <<LAUNCH
 #!/bin/sh
-PYTHONPATH="$code\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m weave "\$@"
+WEAVE_CODE='$quoted'
+PYTHONPATH="\$WEAVE_CODE\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m weave "\$@"
 LAUNCH
 chmod +x "$bin/weave"
 install -m644 "$code/share/weave.service" "$units/weave.service"

@@ -24,7 +24,10 @@
 <script>
 // The invitation is everything after the #. A browser never sends that part to a server, so
 // the code stays between the computer's screen and this phone.
-const invite = location.hash.slice(1);
+// Only what an invitation is made of is passed on. Anything else (a second "#Intent;...;end"
+// would let a crafted link open another app from this page) is treated as no code at all.
+const hash = location.hash.slice(1);
+const invite = /^[A-Za-z0-9%=&.,_~+-]{1,1200}$/.test(hash) ? hash : '';
 const android = /Android/.test(navigator.userAgent);
 const open = document.getElementById('open');
 if (!invite) {

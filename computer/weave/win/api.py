@@ -106,3 +106,7 @@ if WINDOWS:
     user32.GetKeyboardLayout.restype = wintypes.HKL
     user32.VkKeyScanExW.argtypes = [wintypes.WCHAR, wintypes.HKL]
     user32.VkKeyScanExW.restype = ctypes.c_short
+    user32.MapVirtualKeyExW.argtypes = [wintypes.UINT, wintypes.UINT, wintypes.HKL]
+    user32.MapVirtualKeyExW.restype = wintypes.UINT
+    user32.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM, wintypes.UINT, wintypes.UINT, ctypes.POINTER(ULONG_PTR)]
+    user32.SendMessageTimeoutW.restype = wintypes.LPARAM

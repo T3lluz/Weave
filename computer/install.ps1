@@ -6,7 +6,9 @@
 param(
   [string]$AppZip = 'https://github.com/T3lluz/Weave/archive/refs/heads/master.zip',
   [string]$PythonZip = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip',
-  [string]$FfmpegZip = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
+  [string]$PythonSha = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3',
+  [string]$FfmpegZip = 'https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip',
+  [string]$FfmpegSha = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba',
   [switch]$NoPair
 )
 $ErrorActionPreference = 'Stop'
@@ -21,9 +23,15 @@ $bin = Join-Path $root 'bin'
 $tmp = Join-Path $env:TEMP ("weave-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $root, $bin, $tmp | Out-Null
 
-function Fetch($url, $name) {
+# Python and ffmpeg run at every logon from here on: each download is checked against the
+# SHA-256 of the exact file this installer was tested with before anything is unpacked.
+function Fetch($url, $name, $sha) {
   $to = Join-Path $tmp $name
   Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $to
+  if ($sha) {
+    $got = (Get-FileHash -Algorithm SHA256 $to).Hash.ToLower()
+    if ($got -ne $sha.ToLower()) { Remove-Item $to -Force; throw "The download of $name isn't the file it should be (its checksum is $got). Nothing was installed from it." }
+  }
   return $to
 }
 
@@ -34,7 +42,7 @@ Start-Sleep -Milliseconds 400
 
 if (-not (Test-Path (Join-Path $python 'python.exe'))) {
   Write-Host 'Fetching Python...'
-  Expand-Archive -Force (Fetch $PythonZip 'python.zip') $python
+  Expand-Archive -Force (Fetch $PythonZip 'python.zip' $PythonSha) $python
 }
 # the embeddable Python only looks where its ._pth file says: add the folder weave lives in
 $pth = Get-ChildItem $python -Filter 'python*._pth' | Select-Object -First 1
@@ -43,7 +51,7 @@ Set-Content -Encoding ASCII $pth.FullName ($lines + '..\app')
 
 Write-Host 'Fetching Weave...'
 $unpacked = Join-Path $tmp 'app'
-Expand-Archive -Force (Fetch $AppZip 'weave.zip') $unpacked
+Expand-Archive -Force (Fetch $AppZip 'weave.zip' $null) $unpacked
 $package = Get-ChildItem $unpacked -Recurse -Directory -Filter 'weave' |
   Where-Object { Test-Path (Join-Path $_.FullName '__main__.py') } | Select-Object -First 1
 if (-not $package) { throw 'The download has no weave program in it.' }
@@ -54,7 +62,7 @@ Copy-Item -Recurse $package.FullName (Join-Path $app 'weave')
 if (-not (Test-Path (Join-Path $ffmpeg 'bin\ffmpeg.exe')) -and -not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
   Write-Host 'Fetching ffmpeg (about 100 MB)...'
   $unzipped = Join-Path $tmp 'ffmpeg'
-  Expand-Archive -Force (Fetch $FfmpegZip 'ffmpeg.zip') $unzipped
+  Expand-Archive -Force (Fetch $FfmpegZip 'ffmpeg.zip' $FfmpegSha) $unzipped
   $exe = Get-ChildItem $unzipped -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
   New-Item -ItemType Directory -Force (Join-Path $ffmpeg 'bin') | Out-Null
   Copy-Item $exe.FullName (Join-Path $ffmpeg 'bin\ffmpeg.exe')

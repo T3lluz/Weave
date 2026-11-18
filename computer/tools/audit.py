@@ -122,6 +122,9 @@ async def audit(host: str, port: int, code: str, token: str, out: str) -> int:
                 f.write(data)
 
     # ── the pointer: moves land, and the reports say which ──
+    # from a third of the way in: left in a corner by whoever used it last, it has nowhere to go
+    p.send(t="abs", x=0.3, y=0.3)
+    await asyncio.sleep(0.4)
     mark = len(p.inbox)
     for i in range(1, 11):
         p.send(t="m", dx=12, dy=7, s=i)

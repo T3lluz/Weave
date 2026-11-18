@@ -36,7 +36,10 @@ class Codes:
     def take(self, code: str, by: str = "") -> bool:
         """Whether [code] is one that is out; it is spent either way."""
         self._prune()
-        hit = next((c for c in self.out if secrets.compare_digest(c, code)), None)
+        # compared as bytes: a code is whatever a phone sent, and compare_digest refuses
+        # strings with anything past ASCII in them
+        sent = code.encode("utf-8", "replace")
+        hit = next((c for c in self.out if secrets.compare_digest(c.encode(), sent)), None)
         if hit is None:
             return False
         del self.out[hit]

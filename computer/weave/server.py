@@ -83,6 +83,10 @@ CLIP_EVERY = 1.0
 MOVE_SETTLE = 0.003
 # how often the pointer is checked to still be out of the picture (a Hyprland reload puts it back)
 CURSOR_CHECK = 2.0
+# phones that may be waiting for the owner's yes at once
+PENDING_MOST = 3
+# what a quiet line (a shortcut run from the phone's home screen) may send
+QUIET_MAY = {"launch", "open", "key", "text", "ping"}
 
 class Session:
     """One phone, connected."""
@@ -95,6 +99,7 @@ class Session:
         self.key = ""
         self.authorized = False
         # the phone draws the pointer itself, ahead of the picture: the recorders leave it out
+        self.quiet = False            # asked for no notice: may only run a shortcut's steps
         self.local_cursor = False
         # the phone numbers its moves; each pointer report says the last one it already shows,
         # so the phone draws exactly the moves after it on top (recent ones, with when each landed)
@@ -708,6 +713,10 @@ class Session:
             # the phone reconnected) would press buttons nobody lets go of
             return
         d, inj, t = self.daemon, self.daemon.injector, msg.get("t")
+        if self.quiet and t not in QUIET_MAY:
+            # A line that asked for no "connected" notice runs a shortcut's steps and nothing else:
+            # no picture, no sound, no clipboard, no pointer. Watching always shows a notice.
+            return
         if t == "m":
             inj.move(float(msg.get("dx", 0)), float(msg.get("dy", 0)))
             if "s" in msg:
@@ -907,8 +916,10 @@ class Daemon:
         session.name = str(hello.get("name") or "Phone")[:60]
         session.net = str(hello.get("net") or "")[:12]
         session.local_cursor = hello.get("cursor") == "local"
+        session.quiet = bool(hello.get("quiet"))
         ticket = str(hello.get("ticket") or "")
-        if key not in self.devices.data and ticket and secrets.compare_digest(ticket, self.dashboard.secret):
+        if key not in self.devices.data and ticket and secrets.compare_digest(
+                ticket.encode("utf-8", "replace"), self.dashboard.secret.encode("utf-8", "replace")):
             # the dashboard only hands this laptop's ticket to the phone paired with it
             self.devices.data[key] = {"name": session.name, "added": int(time.time()), "via": "dashboard"}
             self.devices.save()
@@ -918,6 +929,13 @@ class Daemon:
             self.devices.save()
             self.log(f"{session.name} paired with a code")
         if key not in self.devices.data:
+            # A stranger on the network must not be able to bury the owner in questions: one phone
+            # waiting per address, and a few in all. The rest are turned away at once.
+            waiting = [s for s, _ in self.pending.values()]
+            if len(waiting) >= PENDING_MOST or any(s.peer == session.peer for s in waiting):
+                session.send_json({"t": "denied"})
+                await asyncio.sleep(0.1)
+                return False
             session.send_json({"t": "pending", "host": self.host})
             self.log(f"{session.name} asked to pair")
             answer = asyncio.get_running_loop().create_future()
@@ -985,13 +1003,22 @@ class Daemon:
         if not answer.done() and said is not None:
             answer.set_result(said)
 
-    def decide(self, allow: bool) -> str:
-        if not self.pending:
-            return "nothing is waiting"
-        for _, (session, answer) in list(self.pending.items()):
-            if not answer.done():
-                answer.set_result(allow)
-        return "allowed" if allow else "denied"
+    def decide(self, allow: bool, name: str | None = None) -> str:
+        """Answers a phone that is waiting. Letting one in takes knowing which: with several
+        waiting it must be named, so a yes meant for one's own phone never lets a stranger's in
+        beside it. Turning away needs no name: all of them go."""
+        waiting = [(s, answer) for s, answer in self.pending.values() if not answer.done()]
+        if name:
+            waiting = [(s, a) for s, a in waiting if s.name == name]
+        if not waiting:
+            return "nothing is waiting" if not name else f"no phone called {name} is waiting"
+        if allow and len(waiting) > 1:
+            names = ", ".join(f"{s.name} ({s.peer})" for s, _ in waiting)
+            return f"more than one is waiting: {names}. Say which: weave allow NAME (weave deny turns them all away)"
+        for _, answer in waiting:
+            answer.set_result(allow)
+        who = ", ".join(f"{s.name} from {s.peer}" for s, _ in waiting)
+        return f"{'let in' if allow else 'turned away'} {who}"
 
     # ── shared state ──
 
@@ -1145,7 +1172,7 @@ class Daemon:
                 s.send_json({"t": "clip", "text": text[:200_000]})
             return {"ok": True, "msg": "sent the clipboard to the phone"}
         if cmd in ("allow", "deny"):
-            return {"ok": True, "msg": self.decide(cmd == "allow")}
+            return {"ok": True, "msg": self.decide(cmd == "allow", req.get("name"))}
         if cmd == "forget":
             return {"ok": True, "msg": f"forgot {await self.forget(req.get('name'))} device(s)"}
         return {"ok": False, "msg": f"unknown command: {cmd}"}
@@ -1203,7 +1230,9 @@ class Daemon:
 
     async def main(self):
         local_line = await local.serve(self.command)
-        link = await asyncio.start_server(self._link, port=self.cfg["port"], reuse_address=True)
+        # reuse_address lets a restart take the port back at once on Linux. On Windows the same
+        # option would let another program take the port over, so it is left off there.
+        link = await asyncio.start_server(self._link, port=self.cfg["port"], reuse_address=os.name == "posix")
         print(f"weave {__version__}: listening on port {self.cfg['port']} as {self.host}")
         # systemd stops the daemon with SIGTERM: leave by the door, so the phone's window and sound end with it
         stop = asyncio.Event()

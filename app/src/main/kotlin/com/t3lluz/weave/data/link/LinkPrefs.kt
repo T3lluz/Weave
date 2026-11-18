@@ -6,6 +6,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.security.SecureRandom
+import org.json.JSONArray
+import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -61,11 +63,44 @@ class LinkPrefs @Inject constructor(
     private val _config = MutableStateFlow(read())
     val config: StateFlow<LinkConfig> = _config
 
-    val token: String by lazy {
+    /** This phone's own secret. It never leaves the phone: each computer gets a token made from it ([tokenFor]). */
+    private val secret: String by lazy {
         prefs.getString(KEY_TOKEN, null) ?: ByteArray(24).also(SecureRandom()::nextBytes)
             .joinToString("") { "%02x".format(it) }
             .also { prefs.edit { putString(KEY_TOKEN, it) } }
     }
+
+    /**
+     * What this phone shows the computer at [host] (its addresses, as saved) to be known by. Each
+     * computer gets its own: one handed to the wrong machine (a link that pointed somewhere else,
+     * a stranger on the Wi-Fi answering to a computer's name) opens no other.
+     */
+    fun tokenFor(host: String, port: Int): String = deriveToken(secret, host, port)
+
+    private val _known = MutableStateFlow(readKnown())
+    /** The computers this phone has been let into, newest first: the list is made of these. */
+    val known: StateFlow<List<KnownComputer>> = _known
+
+    /** The computer just connected to goes to the top of [known], replacing its older entry. */
+    fun remember(cfg: LinkConfig) {
+        if (cfg.host.isBlank()) return
+        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast)
+        val next = (listOf(entry) + _known.value.filterNot { it.host == entry.host && it.port == entry.port }).take(KNOWN_MAX)
+        if (next == _known.value) return
+        _known.value = next
+        prefs.edit { putString(KEY_KNOWN, JSONArray(next.map { it.toJson() }).toString()) }
+    }
+
+    fun forget(host: String, port: Int) {
+        val next = _known.value.filterNot { it.host == host && it.port == port }
+        _known.value = next
+        prefs.edit { putString(KEY_KNOWN, JSONArray(next.map { it.toJson() }).toString()) }
+    }
+
+    private fun readKnown(): List<KnownComputer> = runCatching {
+        val a = JSONArray(prefs.getString(KEY_KNOWN, "[]"))
+        (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(KnownComputer::fromJson) }
+    }.getOrDefault(emptyList())
 
     fun update(change: (LinkConfig) -> LinkConfig) {
         val next = change(_config.value)
@@ -118,7 +153,35 @@ class LinkPrefs @Inject constructor(
 
     private companion object {
         const val KEY_TOKEN = "token"
+        const val KEY_KNOWN = "known"
+        const val KNOWN_MAX = 8
     }
+}
+
+/** A computer this phone has been let into: where it is reached, and what it takes to wake it. */
+data class KnownComputer(val name: String, val host: String, val port: Int, val ticket: String = "", val wakeMac: String = "", val wakeBroadcast: String = "") {
+    fun toJson(): JSONObject = JSONObject().put("name", name).put("host", host).put("port", port).put("ticket", ticket)
+        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast)
+
+    companion object {
+        fun fromJson(o: JSONObject): KnownComputer? {
+            val host = o.optString("host")
+            if (host.isBlank()) return null
+            return KnownComputer(o.optString("name").ifBlank { host.substringBefore(',') }, host, o.optInt("port", LinkProtocol.PORT),
+                o.optString("ticket"), o.optString("wakeMac"), o.optString("wakeBroadcast"))
+        }
+    }
+}
+
+/**
+ * The token for one computer: an HMAC of where it is reached, keyed by the phone's secret. The
+ * addresses are put in one order and case first, so the same computer always gets the same.
+ */
+internal fun deriveToken(secret: String, host: String, port: Int): String {
+    val where = host.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.sorted().joinToString(",")
+    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+    mac.init(javax.crypto.spec.SecretKeySpec(secret.toByteArray(), "HmacSHA256"))
+    return mac.doFinal("weave-token-v2|$where|$port".toByteArray()).joinToString("") { "%02x".format(it) }
 }
 
 /** The wire format shared with the laptop's daemon (tandem/server.py): kind, length, payload. */
