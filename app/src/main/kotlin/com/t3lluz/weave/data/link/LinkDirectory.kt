@@ -30,6 +30,8 @@ data class LinkHost(
     val busy: Boolean,
     /** The dashboard listed it (as opposed to this phone remembering it, or the network answering). */
     val fromDashboard: Boolean = false,
+    /** For a computer this phone knows: the key its token is made from. Blank for one it has never been let into. */
+    val key: String = "",
 )
 
 data class LinkDirectoryState(
@@ -67,14 +69,13 @@ class LinkDirectory @Inject constructor(
         val mine = prefs.known.value.map { k ->
             async {
                 val addresses = k.host.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-                LinkHost(id = "known:${k.host}:${k.port}", name = k.name, addresses = addresses, port = k.port, ticket = k.ticket,
-                    online = answers(addresses, k.port), busy = false)
+                LinkHost(id = "known:${k.key}", name = k.name, addresses = addresses, port = k.port, ticket = k.ticket,
+                    online = answers(addresses, k.port), busy = false, key = k.key)
             }
         }
         val listed = fromDashboard()
-        // a known computer the dashboard lists too is one entry: the dashboard's, which knows its ticket
-        val known = mine.map { it.await() }.filterNot { k -> listed.hosts.any { d -> d.addresses.any { it in k.addresses } } }
-        val hosts = mergeFound(known + listed.hosts, near.await())
+        val (known, fromBoard) = joinKnown(mine.map { it.await() }, listed.hosts)
+        val hosts = mergeFound(known + fromBoard, near.await())
         // a dashboard that didn't answer is only worth saying when nothing was found without it
         LinkDirectoryState(hosts = hosts, loaded = true, problem = listed.problem.takeIf { hosts.isEmpty() })
     }

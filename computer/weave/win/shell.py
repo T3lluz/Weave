@@ -4,8 +4,10 @@ pairing question, the lock, whether a text field has the focus, and the network 
 import asyncio
 import ctypes
 import ipaddress
+import os
 import threading
 import time
+from ctypes import wintypes
 
 from ..proc import run
 from . import api, helpers, screen
@@ -84,41 +86,76 @@ def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):
     asyncio.create_task(run("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script, timeout=ms / 1000 + 10))
 
 
+BOX_TITLE = "Weave"
+
+
 def _ask(title: str, body: str, timeout: float) -> bool | None:
-    # Yes/no with No as the button Enter presses (the box takes the focus from whatever the owner
-    # was typing into: a stray Enter must turn the phone away, not let it in), a question mark,
-    # and over every other window (system modal is what keeps a box from a background program on
-    # top: without it the question opens behind whatever is in front).
-    flags = 0x4 | 0x100 | 0x20 | 0x1000 | 0x10000 | 0x40000
+    # Yes/no with No as the button Enter presses, a question mark, and over every other window
+    # (system modal keeps a box from a background program on top: without it the question opens
+    # behind whatever is in front). It does NOT ask for the keyboard: the owner may be typing, and
+    # a "y" meant for their document must not be a Yes here. The box waits to be clicked.
+    flags = 0x4 | 0x100 | 0x20 | 0x1000 | 0x40000
     try:
         # the sentence goes in the box, not its title: Windows cuts a long title off
         text = f"{title}.\n\n{body}\n\nYes lets it in. No turns it away."
-        answer = api.user32.MessageBoxTimeoutW(None, text, "Weave", flags, 0, int(timeout * 1000))
+        answer = api.user32.MessageBoxTimeoutW(None, text, BOX_TITLE, flags, 0, int(timeout * 1000))
     except AttributeError:
-        answer = api.user32.MessageBoxW(None, f"{title}.\n\n{body}", "Weave", flags)
+        answer = api.user32.MessageBoxW(None, f"{title}.\n\n{body}", BOX_TITLE, flags)
     return True if answer == 6 else False if answer == 7 else None
+
+
+def _close_box():
+    """Takes this program's question off the screen: answered some other way, it is in the way."""
+    found = []
+
+    def one(hwnd, _):
+        pid = wintypes.DWORD()
+        api.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        title = ctypes.create_unicode_buffer(64)
+        api.user32.GetWindowTextW(hwnd, title, 64)
+        kind = ctypes.create_unicode_buffer(32)
+        api.user32.GetClassNameW(hwnd, kind, 32)
+        if pid.value == os.getpid() and title.value == BOX_TITLE and kind.value == "#32770":
+            found.append(hwnd)
+        return 1
+
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(one)
+    api.user32.EnumWindows(proc, 0)
+    for hwnd in found:
+        api.user32.PostMessageW(hwnd, 0x0111, 7, 0)   # WM_COMMAND, No: the box closes as if No was clicked
 
 
 _asking = asyncio.Lock()
 
 
-async def ask(title: str, body: str, timeout: float) -> bool | None:
-    """A question with Yes and No on it: the answer, or None when nobody gave one. One box at a
-    time, each on a thread of its own: a box waits up to two minutes, and the shared pool of
-    threads is what the clipboard runs on."""
+async def ask(title: str, body: str, until: float, still=lambda: True) -> bool | None:
+    """A question with Yes and No on it, up until [until] (the daemon's own clock): the answer, or
+    None when nobody gave one. One box at a time, each on a thread of its own (a box waits up to
+    two minutes, and the shared pool of threads is what the clipboard runs on). [still] says
+    whether anyone is waiting on the answer: a question nobody waits on any more is never shown,
+    and one already up is taken down."""
     async with _asking:
+        left = until - time.monotonic()
+        if left <= 1 or not still():
+            return None
         loop = asyncio.get_running_loop()
         done = loop.create_future()
 
         def work():
             try:
-                result = _ask(title, body, timeout)
+                result = _ask(title, body, left)
             except Exception:
                 result = None
             loop.call_soon_threadsafe(lambda: done.done() or done.set_result(result))
 
         threading.Thread(target=work, daemon=True).start()
-        return await done
+        while not done.done():
+            await asyncio.wait([done], timeout=0.3)
+            if not done.done() and not still():
+                await asyncio.to_thread(_close_box)
+                await asyncio.wait([done], timeout=2)
+                return None
+        return done.result()
 
 
 async def lock():

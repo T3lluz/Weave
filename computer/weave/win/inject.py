@@ -59,12 +59,11 @@ def key_vk(name: str) -> tuple[int, bool] | None:
     return VK.get(name)
 
 
-def layout_stroke(scan: int, dead: bool = False) -> tuple[int, bool, bool] | None:
+def layout_stroke(scan: int) -> tuple[int, bool, bool] | None:
     """What VkKeyScanEx says about a character, as (key, with shift, with AltGr); None when the
-    layout has no key for it, only one that needs some other chord, or a dead key ([dead]: on a
-    Norwegian or German layout ^ ~ ` and their like wait for the next letter to land on, so
-    pressing one types nothing, or the wrong thing with what follows)."""
-    if scan == -1 or dead:
+    layout has no key for it, or only one that needs some other chord. Whether that chord is a
+    dead key is another question: chord_is_dead."""
+    if scan == -1:
         return None
     vk, state = scan & 0xFF, (scan >> 8) & 0xFF
     if state in (0, 1):
@@ -72,6 +71,22 @@ def layout_stroke(scan: int, dead: bool = False) -> tuple[int, bool, bool] | Non
     if state in (6, 7):   # ctrl + alt is AltGr
         return vk, bool(state & 1), True
     return None
+
+
+def chord_is_dead(vk: int, shift: bool, altgr: bool, layout) -> bool:
+    """Whether this key with these modifiers is a dead key on [layout]: one that types nothing by
+    itself and lands on the next letter. It is asked of the chord, not of the key: on a Norwegian
+    layout the key beside + is a plain backslash alone, and dead with Shift (`) or AltGr (´).
+    Windows answers a dead key with a negative count; flag 4 keeps the asking from leaving that
+    dead key waiting in the real keyboard's state."""
+    state = (ctypes.c_ubyte * 256)()
+    if shift:
+        state[0x10] = 0x80
+    if altgr:
+        state[0x11] = state[0x12] = 0x80
+    out = ctypes.create_unicode_buffer(8)
+    scan = api.user32.MapVirtualKeyExW(vk, 0, layout)
+    return api.user32.ToUnicodeEx(vk, scan, state, out, 8, 4, layout) < 0
 
 
 def normalized(x: float, y: float, desk: tuple[int, int, int, int]) -> tuple[int, int]:
@@ -262,23 +277,25 @@ class Injector:
                 stroke = None
                 if len(ch.encode("utf-16-le")) == 2:
                     scan = api.user32.VkKeyScanExW(ch, layout)
-                    # the high bit of the key's character says it is a dead key on this layout
-                    dead = scan != -1 and bool(api.user32.MapVirtualKeyExW(scan & 0xFF, 2, layout) & 0x80000000)
-                    stroke = layout_stroke(scan, dead)
+                    stroke = layout_stroke(scan)
+                    if stroke and chord_is_dead(*stroke, layout):
+                        stroke = None   # typed as itself instead
                 if stroke:
                     vk, shift, altgr = stroke
                     await hold([v for v, on in ((0xA0, shift), (0xA2, altgr), (0xA4, altgr)) if on])
                     self._send(self._key(vk, False), self._key(vk, True))
                 else:
-                    # no key for it: the character itself (both halves of one past the first 65536
-                    # together). The program must have worked it out before the next one arrives,
-                    # or it takes both for the later one.
+                    # No key for it: the character itself. The program must have worked each one
+                    # out before the next arrives, or it takes both for the later one. That holds
+                    # for the two halves of a character past the first 65536 (an emoji) as well:
+                    # sent together, the first half comes out as the second.
                     await hold([])
                     data = ch.encode("utf-16-le")
-                    units = [int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data), 2)]
-                    self._send(*[self._key(0, False, scan=u, unicode=True) for u in units], *[self._key(0, True, scan=u, unicode=True) for u in units])
-                    await asyncio.to_thread(self._caught_up)
-                    await asyncio.sleep(self.packet_pace)
+                    for i in range(0, len(data), 2):
+                        unit = int.from_bytes(data[i:i + 2], "little")
+                        self._send(self._key(0, False, scan=unit, unicode=True), self._key(0, True, scan=unit, unicode=True))
+                        await asyncio.to_thread(self._caught_up)
+                        await asyncio.sleep(self.packet_pace)
                 await asyncio.sleep(self.pace)
             await hold([])
         finally:
@@ -288,10 +305,16 @@ class Injector:
                 self._send(*[self._key(m, True) for m in reversed(held)])
 
     def release_all(self):
-        """Lets go of whatever a dropped connection left held, and drops what it had still to type:
-        the rest of its sentence must not come out under the next phone's fingers."""
+        """Lets go of whatever a dropped connection left held, and stops its typing where it is:
+        what waited to be typed is dropped, and the text being typed right now is cut off (it
+        lets go of its own Shift on the way out). The rest of a sentence must not come out
+        under the next phone's fingers."""
         while not self._queue.empty():
             self._queue.get_nowait()
+        if self._typing:
+            self._typist.cancel()
+            self._typing = False
+            self._typist = asyncio.get_running_loop().create_task(self._type())
         for kind, name in list(self._held):
             if kind == "button":
                 self._send(self._mouse(BUTTONS[name][1], data=BUTTONS[name][2]))

@@ -121,7 +121,7 @@ class LettingIn(unittest.IsolatedAsyncioTestCase):
 
         self.asked = []
 
-        async def ask(key, session, answer):
+        async def ask(key, session, answer, until):
             self.asked.append(session.name)
 
         self.d = SimpleNamespace(
@@ -193,6 +193,49 @@ class LettingIn(unittest.IsolatedAsyncioTestCase):
         server.Daemon.decide(self.d, False)
         await asyncio.gather(*waiting)
 
+    async def test_the_same_phone_trying_again_takes_over_its_own_wait(self):
+        first, first_line = self.phone("192.168.1.50")
+        a = asyncio.create_task(self.hello(first, "a" * 32, name="My Pixel"))
+        await asyncio.sleep(0.01)
+        # it tried again from the same address before anyone answered: not turned away, not asked about twice
+        again, again_line = self.phone("192.168.1.50")
+        b = asyncio.create_task(self.hello(again, "a" * 32, name="My Pixel"))
+        await asyncio.sleep(0.01)
+        self.assertEqual(again_line.kinds(), ["pending"])
+        self.assertEqual(self.asked, ["My Pixel"], "one question")
+        self.assertEqual(server.Daemon.decide(self.d, True), "let in My Pixel from 192.168.1.50")
+        self.assertTrue(await b, "the newer line is the one let in")
+        self.assertFalse(await a, "the older one just ends")
+        self.assertEqual(first_line.kinds(), ["pending"], "and is told nothing more")
+        self.assertEqual(again_line.kinds(), ["pending", "welcome"])
+        self.assertEqual(self.d.pending, {})
+
+    async def test_a_shortcut_from_a_phone_not_yet_let_in_raises_no_question(self):
+        s, line = self.phone()
+        self.assertFalse(await self.hello(s, "q" * 32, quiet=True))
+        self.assertEqual(line.kinds(), ["pending"], "told to pair in the app first")
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.d.pending, {}, "and it holds no place in the queue: the app can ask right after")
+
+    async def test_a_quiet_line_that_goes_on_past_a_shortcut_is_closed(self):
+        s, line = self.phone()
+        await self.hello(s, "a" * 32, self.d.codes.new(), quiet=True)
+        pressed = []
+        self.d.injector = SimpleNamespace(key=lambda *a: pressed.append(a))
+        closed = []
+
+        async def close():
+            closed.append(True)
+            s.closed = True
+
+        s.close = close
+        with mock.patch.object(server.catalog, "bound_code", mock.AsyncMock(return_value=True)):
+            for _ in range(server.QUIET_STEPS + 5):
+                await s.handle({"t": "key", "key": "a", "mods": []})
+            await asyncio.sleep(0)
+        self.assertEqual(len(pressed), server.QUIET_STEPS, "a shortcut's worth of keys and no more")
+        self.assertTrue(closed)
+
     async def test_yes_with_two_waiting_needs_a_name(self):
         mine, mine_line = self.phone("192.168.1.50")
         theirs, theirs_line = self.phone("192.168.1.66")
@@ -214,15 +257,25 @@ class LettingIn(unittest.IsolatedAsyncioTestCase):
         s, line = self.phone()
         await self.hello(s, "a" * 32, self.d.codes.new(), quiet=True)
         self.assertTrue(s.quiet)
-        pressed = []
+        pressed, closed = [], []
         self.d.injector = SimpleNamespace(key=lambda *a: pressed.append(a), move=lambda *a: pressed.append(("moved", a)))
+
+        async def close():
+            closed.append(True)
+            s.closed = True
+
+        s.close = close
         with mock.patch.object(server.catalog, "bound_code", mock.AsyncMock(return_value=True)), \
                 mock.patch.object(server.shell, "clip_get", mock.AsyncMock(return_value="the owner's clipboard")):
             await s.handle({"t": "key", "key": "a", "mods": []})
-            await s.handle({"t": "m", "dx": 5, "dy": 5})
+            self.assertFalse(closed, "a shortcut's step is what a quiet line is for")
+            # anything else (here: reading the clipboard) is not a shortcut: the line is closed
             await s.handle({"t": "clip_get"})
+            await asyncio.sleep(0)
+            await s.handle({"t": "m", "dx": 5, "dy": 5})
             await s.handle({"t": "video", "on": True})
-        self.assertEqual(pressed, [("a", (), None)], "the key went through; the pointer move did not")
+        self.assertEqual(pressed, [("a", (), None)], "the key went through; nothing after it did")
+        self.assertTrue(closed)
         self.assertNotIn("clip", line.kinds())
         self.assertFalse(s.video_wanted)
 

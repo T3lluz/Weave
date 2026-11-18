@@ -47,6 +47,8 @@ data class LinkConfig(
     val wakeBroadcast: String = "",
     /** What is copied on either side is there to paste on the other. */
     val clipSync: Boolean = false,
+    /** What the picked computer's token is made from ([LinkPrefs.tokenFor]): given once, when it is first picked. */
+    val key: String = "",
 )
 
 /**
@@ -63,36 +65,55 @@ class LinkPrefs @Inject constructor(
     private val _config = MutableStateFlow(read())
     val config: StateFlow<LinkConfig> = _config
 
-    /** This phone's own secret. It never leaves the phone: each computer gets a token made from it ([tokenFor]). */
+    /**
+     * This phone's own secret. It never leaves the phone: each computer gets a token made from it
+     * ([tokenFor]). It is a new one, under a new name: builds before this sent the old value
+     * itself to every computer (and to anything a link pointed at), so the old one is thrown away.
+     */
     private val secret: String by lazy {
-        prefs.getString(KEY_TOKEN, null) ?: ByteArray(24).also(SecureRandom()::nextBytes)
-            .joinToString("") { "%02x".format(it) }
-            .also { prefs.edit { putString(KEY_TOKEN, it) } }
+        prefs.getString(KEY_SECRET, null) ?: randomHex(32).also { fresh ->
+            prefs.edit {
+                putString(KEY_SECRET, fresh)
+                remove(KEY_OLD_TOKEN)
+            }
+        }
     }
 
     /**
-     * What this phone shows the computer at [host] (its addresses, as saved) to be known by. Each
-     * computer gets its own: one handed to the wrong machine (a link that pointed somewhere else,
-     * a stranger on the Wi-Fi answering to a computer's name) opens no other.
+     * What this phone shows a computer to be known by, from that computer's [key]: a random name
+     * the phone gave it when it was first picked, kept for as long as the phone knows it. Each
+     * computer gets its own token, so one handed to the wrong machine (a link that pointed
+     * somewhere else, a stranger on the Wi-Fi) opens no other. And it stays the same when the
+     * computer's addresses change, so the computer doesn't ask twice.
      */
-    fun tokenFor(host: String, port: Int): String = deriveToken(secret, host, port)
+    fun tokenFor(key: String): String = deriveToken(secret, key)
+
+    /** A key for a computer this phone hasn't picked before. */
+    fun newKey(): String = randomHex(16)
+
+    private fun randomHex(bytes: Int): String = ByteArray(bytes).also(SecureRandom()::nextBytes).joinToString("") { "%02x".format(it) }
 
     private val _known = MutableStateFlow(readKnown())
     /** The computers this phone has been let into, newest first: the list is made of these. */
     val known: StateFlow<List<KnownComputer>> = _known
 
-    /** The computer just connected to goes to the top of [known], replacing its older entry. */
+    /**
+     * The computer just connected to goes to the top of [known]. It takes the place of its own
+     * older entry (the same key: its addresses may have changed since) and of any other entry at
+     * exactly the same addresses (the same computer, paired again).
+     */
     fun remember(cfg: LinkConfig) {
-        if (cfg.host.isBlank()) return
-        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast)
-        val next = (listOf(entry) + _known.value.filterNot { it.host == entry.host && it.port == entry.port }).take(KNOWN_MAX)
+        if (cfg.host.isBlank() || cfg.key.isBlank()) return
+        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast, cfg.key)
+        val next = (listOf(entry) + _known.value.filterNot { it.key == entry.key || (it.host == entry.host && it.port == entry.port) }).take(KNOWN_MAX)
         if (next == _known.value) return
         _known.value = next
         prefs.edit { putString(KEY_KNOWN, JSONArray(next.map { it.toJson() }).toString()) }
     }
 
-    fun forget(host: String, port: Int) {
-        val next = _known.value.filterNot { it.host == host && it.port == port }
+    /** Takes a computer off the list, by its key: whatever its addresses have become. */
+    fun forget(key: String) {
+        val next = _known.value.filterNot { it.key == key }
         _known.value = next
         prefs.edit { putString(KEY_KNOWN, JSONArray(next.map { it.toJson() }).toString()) }
     }
@@ -125,6 +146,7 @@ class LinkPrefs @Inject constructor(
             putString("wakeMac", next.wakeMac)
             putString("wakeBroadcast", next.wakeBroadcast)
             putBoolean("clipSync", next.clipSync)
+            putString("key", next.key)
         }
     }
 
@@ -148,40 +170,46 @@ class LinkPrefs @Inject constructor(
             wakeMac = prefs.getString("wakeMac", d.wakeMac).orEmpty(),
             wakeBroadcast = prefs.getString("wakeBroadcast", d.wakeBroadcast).orEmpty(),
             clipSync = prefs.getBoolean("clipSync", d.clipSync),
+            // a computer picked by a build before keys gets one now; it will ask once more
+            key = prefs.getString("key", "").orEmpty().ifBlank {
+                if (prefs.getString("host", "").isNullOrBlank()) "" else newKey().also { made -> prefs.edit { putString("key", made) } }
+            },
         )
     }
 
     private companion object {
-        const val KEY_TOKEN = "token"
+        const val KEY_SECRET = "secret_v2"
+        const val KEY_OLD_TOKEN = "token"
         const val KEY_KNOWN = "known"
         const val KNOWN_MAX = 8
     }
 }
 
 /** A computer this phone has been let into: where it is reached, and what it takes to wake it. */
-data class KnownComputer(val name: String, val host: String, val port: Int, val ticket: String = "", val wakeMac: String = "", val wakeBroadcast: String = "") {
+data class KnownComputer(
+    val name: String, val host: String, val port: Int, val ticket: String = "", val wakeMac: String = "", val wakeBroadcast: String = "",
+    /** What its token is made from ([LinkPrefs.tokenFor]). */
+    val key: String = "",
+) {
     fun toJson(): JSONObject = JSONObject().put("name", name).put("host", host).put("port", port).put("ticket", ticket)
-        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast)
+        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast).put("key", key)
 
     companion object {
         fun fromJson(o: JSONObject): KnownComputer? {
             val host = o.optString("host")
-            if (host.isBlank()) return null
+            val key = o.optString("key")
+            if (host.isBlank() || key.isBlank()) return null
             return KnownComputer(o.optString("name").ifBlank { host.substringBefore(',') }, host, o.optInt("port", LinkProtocol.PORT),
-                o.optString("ticket"), o.optString("wakeMac"), o.optString("wakeBroadcast"))
+                o.optString("ticket"), o.optString("wakeMac"), o.optString("wakeBroadcast"), key)
         }
     }
 }
 
-/**
- * The token for one computer: an HMAC of where it is reached, keyed by the phone's secret. The
- * addresses are put in one order and case first, so the same computer always gets the same.
- */
-internal fun deriveToken(secret: String, host: String, port: Int): String {
-    val where = host.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.sorted().joinToString(",")
+/** The token for one computer: an HMAC of the key the phone gave it, keyed by the phone's secret. */
+internal fun deriveToken(secret: String, key: String): String {
     val mac = javax.crypto.Mac.getInstance("HmacSHA256")
     mac.init(javax.crypto.spec.SecretKeySpec(secret.toByteArray(), "HmacSHA256"))
-    return mac.doFinal("weave-token-v2|$where|$port".toByteArray()).joinToString("") { "%02x".format(it) }
+    return mac.doFinal("weave-token-v3|$key".toByteArray()).joinToString("") { "%02x".format(it) }
 }
 
 /** The wire format shared with the laptop's daemon (tandem/server.py): kind, length, payload. */

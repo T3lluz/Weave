@@ -32,11 +32,17 @@ def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):
         "-h", "string:x-canonical-private-synchronous:weave", title, body))
 
 
-async def ask(title: str, body: str, timeout: float) -> bool | None:
-    """A question with Allow and Deny on it: the answer, or None when nobody gave one."""
+async def ask(title: str, body: str, until: float, still=lambda: True) -> bool | None:
+    """A question with Allow and Deny on it, up until [until] (the daemon's own clock): the answer,
+    or None when nobody gave one. [still] says whether anyone is waiting on it any more; a
+    notification answered another way just runs out."""
+    import time
+    left = until - time.monotonic() - 3
+    if left <= 0 or not still():
+        return None
     out = await run(
-        "notify-send", "-a", "Weave", "-i", "phone", "-t", str(int(timeout * 1000)), "-w",
-        "-A", "default=Allow", "-A", "deny=Deny", title, body, timeout=timeout)
+        "notify-send", "-a", "Weave", "-i", "phone", "-t", str(int(left * 1000)), "-w",
+        "-A", "default=Allow", "-A", "deny=Deny", title, body, timeout=left)
     return (out.strip() == "default") if out.strip() else None
 
 

@@ -115,6 +115,28 @@ internal fun mergeFound(listed: List<LinkHost>, found: List<LinkHost>): List<Lin
     return out
 }
 
+/**
+ * A computer this phone knows that the dashboard lists too is one entry: the dashboard's, which
+ * has its newest addresses and its ticket, carrying the key the phone gave it (so it is not
+ * asked about again). The dashboard is asked over HTTPS at an address the owner set, which is
+ * why an address it lists may tie its entry to a known computer. Returns the known computers
+ * left over, and the dashboard's list.
+ */
+internal fun joinKnown(known: List<LinkHost>, board: List<LinkHost>): Pair<List<LinkHost>, List<LinkHost>> {
+    val taken = HashSet<String>()
+    val joined = board.map { d ->
+        val k = known.firstOrNull { k -> k.id !in taken && k.port == d.port && k.addresses.any { it in d.addresses } }
+        if (k == null) d else d.copy(key = k.key).also { taken += k.id }
+    }
+    return known.filterNot { it.id in taken } to joined
+}
+
+/** Whether [laptop] is the computer saved as [host] and [port]: by an address they share, never by its name. */
+internal fun isSaved(laptop: LinkHost, host: String, port: Int): Boolean {
+    val saved = host.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    return laptop.port == port && laptop.addresses.any { it in saved }
+}
+
 /** Whether anything answers at one of [addresses]: a known computer that is on, wherever it is. */
 internal suspend fun answers(addresses: List<String>, port: Int, waitMs: Int = 700): Boolean = withContext(Dispatchers.IO) {
     addresses.any { address ->

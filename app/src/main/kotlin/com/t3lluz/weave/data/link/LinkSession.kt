@@ -230,7 +230,7 @@ class LinkSession @Inject constructor(
                 val out = s.getOutputStream()
                 writer = Thread({ write(out) }, "link-out").apply { isDaemon = true; start() }
                 sendJson(
-                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.host, cfg.port)).put("ticket", cfg.ticket)
+                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.key)).put("ticket", cfg.ticket)
                         .put("name", Build.MODEL).put("ver", 3).put("net", network())
                         .put("cursor", if (cfg.localPointer) "local" else "laptop"),
                 )

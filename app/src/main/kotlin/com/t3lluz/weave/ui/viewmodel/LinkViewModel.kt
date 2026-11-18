@@ -85,23 +85,32 @@ class LinkViewModel @Inject constructor(
         }
     }
 
+    /**
+     * A computer of the list was tapped. One this phone knows keeps its key (and so its token, and
+     * what wakes it); one it has never been let into gets a new key, whatever it calls itself.
+     */
     fun connectTo(laptop: LinkHost) {
         shortcutSheet = null
-        prefs.update { it.copy(host = laptop.addresses.joinToString(","), port = laptop.port, name = laptop.name, ticket = laptop.ticket) }
+        val known = prefs.known.value.firstOrNull { it.key == laptop.key && laptop.key.isNotBlank() }
+        prefs.update {
+            it.copy(
+                host = laptop.addresses.joinToString(","), port = laptop.port, name = laptop.name, ticket = laptop.ticket,
+                key = known?.key ?: prefs.newKey(), wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty(),
+            )
+        }
         session.reconnect()
     }
 
     /** Back to the list, with nothing picked. */
     /** The picked computer is taken off this phone's list of its own, and let go of. */
     fun forget() {
-        val cfg = prefs.config.value
-        prefs.forget(cfg.host, cfg.port)
+        prefs.forget(prefs.config.value.key)
         disconnect()
     }
 
     fun disconnect() {
         shortcutSheet = null
-        prefs.update { it.copy(host = "", name = "", ticket = "") }
+        prefs.update { it.copy(host = "", name = "", ticket = "", key = "", wakeMac = "", wakeBroadcast = "") }
         session.stop()
         // the laptop tells the dashboard it is free within a moment; ask again then, so the
         // list doesn't say this phone is still using it
@@ -156,12 +165,24 @@ class LinkViewModel @Inject constructor(
 
     private fun pair(invite: com.t3lluz.weave.data.link.LinkInvite) {
         shortcutSheet = null
-        prefs.update { it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code) }
+        // always a new key: an invitation says where to connect, and a token made for another
+        // computer must never go to an address a code brought
+        prefs.update {
+            it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code,
+                key = prefs.newKey(), wakeMac = "", wakeBroadcast = "")
+        }
         session.reconnect()
     }
 
     fun connectTo(address: String) {
-        prefs.update { it.copy(host = address.trim(), port = com.t3lluz.weave.data.link.LinkProtocol.PORT, name = address.trim(), ticket = "") }
+        val typed = address.trim()
+        val port = com.t3lluz.weave.data.link.LinkProtocol.PORT
+        // the same address typed before is the same computer: its key, so it doesn't ask again
+        val known = prefs.known.value.firstOrNull { it.host == typed && it.port == port }
+        prefs.update {
+            it.copy(host = typed, port = port, name = known?.name ?: typed, ticket = "", key = known?.key ?: prefs.newKey(),
+                wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty())
+        }
         session.reconnect()
     }
 

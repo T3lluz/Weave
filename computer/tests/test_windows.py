@@ -77,9 +77,6 @@ class Keys(unittest.TestCase):
         self.assertEqual(inject.layout_stroke(0x0632), (0x32, False, True))       # @ on a Nordic layout: AltGr + 2
         self.assertIsNone(inject.layout_stroke(-1), "no key for it: sent as itself")
         self.assertIsNone(inject.layout_stroke(0x0241), "ctrl + a is a command, not a character")
-        # ^ on a Norwegian layout is a dead key: pressing it types nothing until the next letter
-        self.assertIsNone(inject.layout_stroke(0x01DD, dead=True))
-        self.assertEqual(inject.layout_stroke(0x01DD), (0xDD, True, False))
 
     def test_a_point_maps_onto_the_whole_desktop(self):
         desk = (-1920, 0, 3840, 1080)   # a monitor to the left of the main one

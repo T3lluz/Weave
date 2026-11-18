@@ -48,7 +48,9 @@ main() {
 
   # Keep the three newest builds; older ones only take space. Never the one just
   # switched to, whatever the dates say.
-  ls -1dt "$build"/site-* | tail -n +4 | grep -v -x -F "$build/site-$sha" | xargs -r rm -rf
+  # (grep finding nothing to pass on is not a failure: with three builds or
+  # fewer there is nothing to delete, and the script must go on to the restart.)
+  ls -1dt "$build"/site-* | tail -n +4 | { grep -v -x -F "$build/site-$sha" || true; } | xargs -r rm -rf
 
   # Recreates the container only if compose.yml changed. Then restart it
   # either way: its working directory is the build it started on.

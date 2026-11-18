@@ -42,8 +42,10 @@ class LinkOneShot @Inject constructor(
             return RunOutcome.Done
         }
         val cfg = prefs.config.value
-        if (cfg.host.isBlank()) return RunOutcome.Failed("Pick a computer in Weave first.")
+        if (cfg.host.isBlank() || cfg.key.isBlank()) return RunOutcome.Failed("Pick a computer in Weave first.")
         val name = cfg.name.ifBlank { "the computer" }
+        // the remote is waiting for the owner's yes there: a second line would only get in its way
+        if (session.state.value.status == LinkStatus.Pending) return RunOutcome.Failed("$name hasn't let this phone in yet. Answer its question first.")
         return withContext(Dispatchers.IO) {
             var socket: Socket? = null
             try {
@@ -52,7 +54,7 @@ class LinkOneShot @Inject constructor(
                 val out = socket.getOutputStream()
                 send(
                     out,
-                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.host, cfg.port)).put("ticket", cfg.ticket)
+                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.key)).put("ticket", cfg.ticket)
                         .put("name", Build.MODEL).put("ver", 3).put("cursor", "laptop").put("quiet", true),
                 )
                 when (val answer = awaitWelcome(DataInputStream(socket.getInputStream().buffered()))) {

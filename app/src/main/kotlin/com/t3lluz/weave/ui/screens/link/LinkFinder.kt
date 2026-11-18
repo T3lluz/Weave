@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import com.t3lluz.weave.data.link.LinkConfig
 import com.t3lluz.weave.data.link.LinkDirectoryState
 import com.t3lluz.weave.data.link.LinkHost
+import com.t3lluz.weave.data.link.isSaved
 import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
 import com.t3lluz.weave.ui.components.LivePulseDot
@@ -126,8 +127,10 @@ internal fun LinkFinder(
     val keyboard = LocalSoftwareKeyboardController.current
     val picked = config.host.isNotBlank()
     val pickedName = config.name.ifBlank { config.host.substringBefore(',') }
-    // a laptop reached by its address is not in the dashboard's list, but it is still the one picked
-    val listed = laptops.hosts.any { it.name == pickedName }
+    // A computer reached by its address may not be in the list, but it is still the one picked.
+    // Which row is "the picked one" goes by an address it shares with what is saved, never by its
+    // name: a stranger on the Wi-Fi can answer to any name.
+    val listed = laptops.hosts.any { isSaved(it, config.host, config.port) }
     val reduced = rememberReducedMotion()
     val entrance = remember { Animatable(if (reduced) 1f else 0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(AppMotion.HealthEntrance.MS, easing = LinearEasing)) }
@@ -187,9 +190,11 @@ internal fun LinkFinder(
                 )
             }
             laptops.hosts.forEach { laptop ->
-                val mine = picked && laptop.name == pickedName
+                val mine = picked && isSaved(laptop, config.host, config.port)
                 LaptopRoom(
-                    laptop.name, online = laptop.online, busy = laptop.busy,
+                    // one this phone has never been let into shows where it is: its name is only its own word
+                    if (laptop.key.isBlank() && !laptop.fromDashboard) "${laptop.name} · ${laptop.addresses.first()}" else laptop.name,
+                    online = laptop.online, busy = laptop.busy,
                     state = if (mine) state else LinkState(), picked = mine,
                     onClick = { onPick(laptop) }, onRetry = onRetry, onForget = onForget,
                     modifier = Modifier.riseIn(index++, rise),

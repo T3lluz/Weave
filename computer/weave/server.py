@@ -85,8 +85,12 @@ MOVE_SETTLE = 0.003
 CURSOR_CHECK = 2.0
 # phones that may be waiting for the owner's yes at once
 PENDING_MOST = 3
-# what a quiet line (a shortcut run from the phone's home screen) may send
+# how long a phone waits for the owner's yes
+PENDING_WAIT = 120
+# what a quiet line (a shortcut run from the phone's home screen) may send, how much of it (a
+# shortcut has eight steps at most, each a message), and for how long (eight waits of ten seconds)
 QUIET_MAY = {"launch", "open", "key", "text", "ping"}
+QUIET_STEPS, QUIET_SECONDS = 16, 120
 
 class Session:
     """One phone, connected."""
@@ -100,6 +104,7 @@ class Session:
         self.authorized = False
         # the phone draws the pointer itself, ahead of the picture: the recorders leave it out
         self.quiet = False            # asked for no notice: may only run a shortcut's steps
+        self.quiet_steps, self.quiet_since = 0, time.monotonic()
         self.local_cursor = False
         # the phone numbers its moves; each pointer report says the last one it already shows,
         # so the phone draws exactly the moves after it on top (recent ones, with when each landed)
@@ -713,10 +718,14 @@ class Session:
             # the phone reconnected) would press buttons nobody lets go of
             return
         d, inj, t = self.daemon, self.daemon.injector, msg.get("t")
-        if self.quiet and t not in QUIET_MAY:
-            # A line that asked for no "connected" notice runs a shortcut's steps and nothing else:
-            # no picture, no sound, no clipboard, no pointer. Watching always shows a notice.
-            return
+        if self.quiet:
+            # A line that asked for no "connected" notice runs one shortcut's steps and nothing
+            # else: no picture, no sound, no clipboard, no pointer, and not for long. Anything
+            # more than a shortcut is a session, and a session shows its notice.
+            self.quiet_steps += t != "ping"
+            if t not in QUIET_MAY or self.quiet_steps > QUIET_STEPS or time.monotonic() - self.quiet_since > QUIET_SECONDS:
+                asyncio.create_task(self.close())
+                return
         if t == "m":
             inj.move(float(msg.get("dx", 0)), float(msg.get("dy", 0)))
             if "s" in msg:
@@ -929,24 +938,41 @@ class Daemon:
             self.devices.save()
             self.log(f"{session.name} paired with a code")
         if key not in self.devices.data:
-            # A stranger on the network must not be able to bury the owner in questions: one phone
-            # waiting per address, and a few in all. The rest are turned away at once.
-            waiting = [s for s, _ in self.pending.values()]
-            if len(waiting) >= PENDING_MOST or any(s.peer == session.peer for s in waiting):
-                session.send_json({"t": "denied"})
+            if session.quiet:
+                # A shortcut run from the home screen never raises the question: nobody is looking
+                # at the phone's remote to see "waiting", and its line is gone a moment later.
+                session.send_json({"t": "pending", "host": self.host})
                 await asyncio.sleep(0.1)
                 return False
+            before = self.pending.get(key)
+            if before:
+                # The same phone again while its first try still waits (it tried again, or changed
+                # network): the wait is handed to this line, with the question already up.
+                answer = before[1]
+            else:
+                # A stranger on the network must not be able to bury the owner in questions: one
+                # phone waiting per address, and a few in all. The rest are turned away at once.
+                waiting = [s for s, _ in self.pending.values()]
+                if len(waiting) >= PENDING_MOST or any(s.peer == session.peer for s in waiting):
+                    session.send_json({"t": "denied"})
+                    await asyncio.sleep(0.1)
+                    return False
+                answer = asyncio.get_running_loop().create_future()
+                self.log(f"{session.name} asked to pair")
+                asyncio.create_task(self._ask(key, session, answer, time.monotonic() + PENDING_WAIT))
             session.send_json({"t": "pending", "host": self.host})
-            self.log(f"{session.name} asked to pair")
-            answer = asyncio.get_running_loop().create_future()
             self.pending[key] = (session, answer)
             self.dashboard.poke()
-            asyncio.create_task(self._ask(key, session, answer))
             try:
-                allowed = await asyncio.wait_for(answer, 120)
+                # shielded: this line giving up must not take the answer away from the one after it
+                allowed = await asyncio.wait_for(asyncio.shield(answer), PENDING_WAIT)
             except asyncio.TimeoutError:
                 allowed = False
+            if self.pending.get(key, (None,))[0] is not session:
+                return False   # a newer line from the same phone has the wait now, and gets the answer
             self.pending.pop(key, None)
+            if not answer.done():
+                answer.set_result(False)   # nobody answered in time: the question goes away with it
             self.dashboard.poke()
             if not allowed:
                 session.send_json({"t": "denied"})
@@ -996,10 +1022,13 @@ class Daemon:
             s.replaced = True
             asyncio.create_task(s.close())
 
-    async def _ask(self, key: str, session: Session, answer: asyncio.Future):
+    async def _ask(self, key: str, session: Session, answer: asyncio.Future, until: float):
+        """Puts the question to the owner, for as long as the phone is still waiting on it: answered
+        another way (weave allow, weave deny) or given up on, the question goes away."""
         said = await shell.ask(
             f"{session.name} wants to control this computer",
-            f"From {session.peer}. Allow it here, or run: weave allow", 115)
+            f"From {session.peer}. Allow it here, or run: weave allow",
+            until=until, still=lambda: not answer.done())
         if not answer.done() and said is not None:
             answer.set_result(said)
 

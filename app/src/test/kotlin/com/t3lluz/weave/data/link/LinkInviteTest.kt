@@ -75,14 +75,42 @@ class LinkInviteTest {
 
     @Test
     fun eachComputerGetsATokenOfItsOwn() {
-        val home = deriveToken("secret", "192.168.1.23,100.74.84.100,t3lluz", 47600)
-        assertEquals("the same computer, its addresses in any order or case", home, deriveToken("secret", " T3lluz, 100.74.84.100 ,192.168.1.23", 47600))
+        val home = deriveToken("secret", "key-of-home")
+        assertEquals("the same computer, the same token, whatever its addresses have become", home, deriveToken("secret", "key-of-home"))
         assertTrue(home.length >= 32)
-        // what a link pointing somewhere else would be sent opens nothing at home
-        assertFalse(home == deriveToken("secret", "evil.example", 47600))
-        assertFalse(home == deriveToken("secret", "192.168.1.23,100.74.84.100,t3lluz", 5000))
-        assertFalse("and another phone's is another", home == deriveToken("other", "192.168.1.23,100.74.84.100,t3lluz", 47600))
-        assertFalse("the phone's own secret is never the token", home.contains("secret"))
+        // what a link pointing somewhere else is sent (a new key) opens nothing at home
+        assertFalse(home == deriveToken("secret", "key-of-a-stranger"))
+        assertFalse("and another phone's is another", home == deriveToken("other", "key-of-home"))
+        assertFalse("neither the secret nor the key is in it", home.contains("secret") || home.contains("key-of-home"))
+    }
+
+    @Test
+    fun aKnownComputerTheDashboardListsIsOneEntryWithItsKey() {
+        val known = listOf(
+            LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "100.74.84.100", "t3lluz"), 47600, "old-code", online = false, busy = false, key = "k1"),
+            LinkHost("known:k2", "desk", listOf("192.168.1.40"), 47600, "", online = true, busy = false, key = "k2"),
+        )
+        // the dashboard knows the first by its tailnet address, with a newer one beside it
+        val board = listOf(LinkHost("d1", "t3lluz", listOf("100.74.84.100", "100.74.84.200", "t3lluz"), 47600, "ticket", online = true, busy = false, fromDashboard = true))
+        val (left, joined) = joinKnown(known, board)
+        assertEquals(listOf("desk"), left.map { it.name })
+        assertEquals("the dashboard's addresses and ticket, the phone's key", "k1", joined[0].key)
+        assertEquals(listOf("100.74.84.100", "100.74.84.200", "t3lluz"), joined[0].addresses)
+        assertEquals("ticket", joined[0].ticket)
+        // one on another port, or with no address in common, is not that computer
+        val other = listOf(LinkHost("d2", "t3lluz", listOf("100.99.0.1"), 47600, "", online = true, busy = false, fromDashboard = true))
+        assertEquals("", joinKnown(known, other).second[0].key)
+    }
+
+    @Test
+    fun theRowThatIsTheSavedComputerIsFoundByAddressNotByName() {
+        val real = LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "t3lluz"), 47600, "", online = true, busy = false, key = "k1")
+        val stranger = LinkHost("lan:192.168.1.66", "t3lluz", listOf("192.168.1.66"), 47600, "", online = true, busy = false)
+        val saved = "192.168.1.23, 100.74.84.100,t3lluz"
+        assertTrue(isSaved(real, saved, 47600))
+        assertFalse("the same name from another address is somebody else", isSaved(stranger, saved, 47600))
+        assertFalse(isSaved(real, saved, 5000))
+        assertFalse(isSaved(real, "", 47600))
     }
 
     @Test
