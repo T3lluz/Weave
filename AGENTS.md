@@ -46,3 +46,14 @@ The app updates itself from those releases, DailyDash's updater copied over (`da
 ## Home screen widget
 
 `widget/` is a Glance widget of shortcuts. `ShortcutsWidgetConfigActivity` picks two to eight for one widget (from Weave's sheet for a new one, where `WidgetPinnedReceiver` puts the picks on the widget once the home screen adds it; from the home screen's widget list; from a widget's edit button). `widgetLayout` splits however many were picked into rows that fill the widget, and sizes the pictures. Gaps are padding, not spacers: Glance allows ten children in a row. A tap goes to `ShortcutRunWorker`, which runs the steps through `LinkOneShot`: the remote's own line when it is up, else a line of its own that says hello with `quiet` (no "connected" notice on the computer), sends the steps at `paceSteps`' pace and hangs up. `WidgetFaces` draws the tiles' pictures as bitmaps. Test it on the emulator against a fake laptop, never by tapping real shortcuts.
+
+## The computer side
+
+`computer/` is the daemon the app talks to (it began as tandem, a separate repo). One `server.py` for Linux and Windows; `desk.py` picks the system's own modules, and `weave/win/` holds Windows'. Read `computer/README.md` first. Rules that bit:
+
+- Anything slow on Windows (PowerShell takes seconds cold) is done at startup in `shell.prewarm()` or in the background, never on a phone's hello: the welcome waited on the network card lookup once and the first connection after boot hung.
+- Every program the Windows daemon starts gets `CREATE_NO_WINDOW`, or a console window flashes on the user's screen (`proc.run` does it; a new `create_subprocess_exec` must too).
+- Text on Windows is typed at `TYPING_PACE` with the layout's real keys: in a burst, Windows 11's Notepad drops Shift and blurs characters sent as themselves.
+- The pairing question on Windows is system modal, or it opens behind the window in front.
+- Test Windows in the VM at `~/windows-dualboot/vm/weave` (`run.sh` starts it, `./win 'powershell'` runs a command in its desktop session, `host.py` must be running). `computer/tools/audit.py 127.0.0.1:47700` audits it. Never run the audit against a machine someone is using.
+- Pairing: `weave pair` makes a one-time code (`pairing.py`), carried in a link's fragment. The app reads it from a scan (`LinkScan.kt`), from `weave://pair?...` (`MainActivity`), and `LinkInvite.kt` parses it. Discovery is a UDP "weave?" broadcast (`discovery.py`, `findOnNetwork`).
