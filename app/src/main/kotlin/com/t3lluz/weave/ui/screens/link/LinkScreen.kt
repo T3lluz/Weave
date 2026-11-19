@@ -3,12 +3,14 @@ package com.t3lluz.weave.ui.screens.link
 import android.content.ClipData
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.Build
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkHorizontally
@@ -30,6 +32,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,14 +62,19 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toComposeRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -184,11 +193,13 @@ fun LinkScreen(
         }
     }
 
-    // the picture going over to another monitor is a soft step under the thumb
+    // Going over to another monitor is felt under the thumb. With the picture showing, the picture
+    // says so itself as it slides (LinkPreview); folded away, it is one soft step here.
     val shownMonitor = state.shownMonitor?.name
     var monitorWas by remember { mutableStateOf(shownMonitor) }
     LaunchedEffect(shownMonitor) {
-        if (monitorWas != null && shownMonitor != null && shownMonitor != monitorWas) linkHaptics.slide()
+        val pictureShows = config.showPicture || !state.canHidePicture
+        if (monitorWas != null && shownMonitor != null && shownMonitor != monitorWas && !pictureShows) linkHaptics.slide()
         monitorWas = shownMonitor
     }
 
@@ -732,13 +743,32 @@ private fun Upright(
 }
 
 /**
- * The full-screen panel's glass, in the hands' mint: folded to its handle it is a circle, and
- * unfolded it keeps those corners. Round, and [PANEL_INSET] in from the screen's top corner, so
- * it sits inside a phone's own rounded corner instead of running into it.
+ * The full-screen panel's glass, in the hands' mint: folded to its handle it is a circle, a
+ * bubble [PANEL_BUBBLE] across, and unfolded it keeps those corners. It rests [PANEL_INSET] in
+ * from the screen's edges, so in a corner it sits inside a phone's own rounded corner instead of
+ * running into it, and [HOLE_GAP] clear of the camera.
  */
 private val PanelShape = RoundedCornerShape(28.dp)
+private val PANEL_PAD = 5.dp
+private val PANEL_BUBBLE = PANEL_HANDLE + PANEL_PAD * 2
 private val PANEL_INSET = 16.dp
+private val HOLE_GAP = 6.dp
 private val PanelTint = lerp(Color(0xFF0B0B0D), LinkHandsTone, 0.4f).copy(alpha = 0.74f)
+
+/** The camera's holes in the screen, in px of the window, which the picture runs under on its side. */
+@Composable
+private fun cameraHoles(): List<Rect> {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val cutout = WindowInsets.displayCutout
+    // which sides it is on: a phone turned right round has it on the other one, and nothing else says so
+    val sides = listOf(cutout.getLeft(density, direction), cutout.getTop(density), cutout.getRight(density, direction), cutout.getBottom(density))
+    return remember(view, sides) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) emptyList()
+        else view.rootWindowInsets?.displayCutout?.boundingRects.orEmpty().map { it.toComposeRect() }
+    }
+}
 
 // ── on its side: the laptop's screen fills the phone ────────────────────────────
 
@@ -772,7 +802,27 @@ private fun Sideways(
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Where the panel's bubble rests, and which way the panel unfolds from there.
+        val density = LocalDensity.current
+        val holes = cameraHoles()
+        // with no picture to touch, the whole phone is the trackpad, and the panel is a control short
+        val touchable = config.showPicture || !state.canHidePicture
+        val unfolded = PANEL_BUTTON * (if (touchable) 7 else 6) + PANEL_DIVIDER * 2 + PANEL_BUBBLE
+        val field = remember(constraints.maxWidth, constraints.maxHeight, holes, unfolded, density) {
+            with(density) {
+                PanelField(
+                    constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), PANEL_BUBBLE.toPx(), PANEL_INSET.toPx(),
+                    holes, HOLE_GAP.toPx(), unfolded.toPx(),
+                )
+            }
+        }
+        val place = remember(field) { PanelPlace(field, field.from(viewModel.panelSpot)) }
+        // the keyboard and the keys over it take the foot of the screen: a panel down there moves up
+        val ime = WindowInsets.ime
+        var keysHeight by remember { mutableIntStateOf(0) }
+        val keys by animateIntAsState(if (imeVisible) keysHeight else 0, AppMotion.Link.panel(), label = "keys")
+
         if (!config.showPicture && state.canHidePicture) {
             LinkTrackpad(
                 viewModel = viewModel, config = config, hint = !viewModel.touched && !imeVisible, buttons = !imeVisible,
@@ -803,22 +853,33 @@ private fun Sideways(
                 ),
         )
 
-        // The controls and the shortcuts: one glass panel that unfolds from its handle.
+        // The controls and the shortcuts: one glass panel that unfolds from its handle, wherever
+        // on the screen's edges the handle was left, into the room there is from there.
         PanelStack(
             Modifier
-                .align(Alignment.TopEnd)
-                // clear of the screen's own round corner, which a box 12 dp in runs into on a Pixel
-                .padding(top = PANEL_INSET, end = PANEL_INSET)
+                .panelPlace(
+                    place, floor = { ime.getBottom(density) + keys },
+                    onGrab = {
+                        haptics.grab()
+                        open = false
+                    },
+                    onDrop = {
+                        haptics.drop()
+                        viewModel.panelSpot = it
+                    },
+                )
                 .chromeGlass(hazeState, PanelShape, tint = PanelTint, outline = LinkHandsTone.copy(alpha = 0.22f))
                 // it grows from its handle: the handle stays put and in view, and the rest is uncovered from it
-                .animateContentSize(AppMotion.Link.panel(), alignment = Alignment.TopEnd)
-                .padding(5.dp),
+                .animateContentSize(AppMotion.Link.panel(), alignment = place.corner)
+                .padding(PANEL_PAD),
+            shelfAbove = place.up,
             controls = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // the handle is at the end the bubble is at: the controls unfold away from the screen's edge
+                    if (!place.left) PanelHandle(open) { open = !open }
                     if (open) {
                         val touch = viewModel.touchMode
-                        // with no picture to touch, the whole phone is the trackpad
-                        if (config.showPicture || !state.canHidePicture) {
+                        if (touchable) {
                             PanelButton(0, if (touch) AppIcons.Scan else AppIcons.MousePointer, if (touch) "Touch" else "Trackpad", LinkHandsTone, on = touch) {
                                 used++
                                 viewModel.touchMode = !touch
@@ -836,11 +897,12 @@ private fun Sideways(
                         PanelDivider()
                         PanelButton(6, AppIcons.Minimize, "Exit") { onUpright() }
                     }
-                    PanelHandle(open) { open = !open }
+                    if (place.left) PanelHandle(open) { open = !open }
                 }
             },
-            shelf = if (open && shortcuts.isNotEmpty()) {
-                { PanelShortcuts(shortcuts, viewModel.shortcutStore, viewModel.running, onUsed = { used++ }) { viewModel.runShortcut(it) } }
+            // out of the way while typing, as upright: the keyboard leaves room for one row
+            shelf = if (open && shortcuts.isNotEmpty() && !imeVisible) {
+                { PanelShortcuts(shortcuts, viewModel.shortcutStore, viewModel.running, above = place.up, onUsed = { used++ }) { viewModel.runShortcut(it) } }
             } else null,
         )
 
@@ -850,7 +912,7 @@ private fun Sideways(
             exit = slideOutVertically(AppMotion.slideTween()) { it } + fadeOut(AppMotion.fadeTween()),
             modifier = Modifier.align(Alignment.BottomCenter).imePadding(),
         ) {
-            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp).chromeGlass(hazeState, RoundedCornerShape(18.dp))) {
+            Box(Modifier.onSizeChanged { keysHeight = it.height }.padding(horizontal = 12.dp, vertical = 6.dp).chromeGlass(hazeState, RoundedCornerShape(18.dp))) {
                 KeyRow(mods, LinkHandsTone, onMods, onKey)
             }
         }

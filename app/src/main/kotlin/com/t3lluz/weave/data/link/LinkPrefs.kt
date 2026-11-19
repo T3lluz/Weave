@@ -152,6 +152,17 @@ class LinkPrefs @Inject constructor(
         get() = prefs.getLong("clipSeen", -1L)
         set(value) = prefs.edit { putLong("clipSeen", value) }
 
+    /**
+     * Where the full-screen panel's bubble was left: how far across and down the screen, 0 to 1
+     * each. The top right corner until it is moved.
+     */
+    var panelSpot: Pair<Float, Float>
+        get() = prefs.getFloat("panelX", 1f) to prefs.getFloat("panelY", 0f)
+        set(value) = prefs.edit {
+            putFloat("panelX", value.first)
+            putFloat("panelY", value.second)
+        }
+
     fun update(change: (LinkConfig) -> LinkConfig) {
         val next = change(_config.value)
         if (next == _config.value) return

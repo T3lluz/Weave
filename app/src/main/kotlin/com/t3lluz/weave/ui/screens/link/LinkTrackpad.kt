@@ -299,19 +299,22 @@ internal fun LinkTrackpad(
                     }
                     onDrawBehind {
                         drawPath(weave, Color.White.copy(alpha = 0.07f))
-                        // held: the dots round each finger on the pad are lit in the hands' green, brightest close in
+                        // held: the dots round each finger on the pad are lit in the hands' green, brightest
+                        // close in and dying away to nothing at the rim, so the light has no edge to see
                         val g = grip.value.coerceIn(0f, 1.2f)
                         if (g > 0.01f) {
                             for (dent in dents) {
                                 val at = dent.at
                                 if (!dent.touching || at == Offset.Unspecified) continue
-                                for ((share, light) in GRIP_BANDS) {
-                                    val r = GRIP_DP * density * share * (0.55f + 0.45f * g)
-                                    ring.rewind()
-                                    ring.fillType = PathFillType.NonZero
-                                    ring.addOval(androidx.compose.ui.geometry.Rect(at.x - r, at.y - r, at.x + r, at.y + r))
-                                    clipPath(ring) { drawPath(weave, LinkHandsTone.copy(alpha = (light * g).coerceIn(0f, 1f))) }
-                                }
+                                val r = GRIP_DP * density * (0.55f + 0.45f * g)
+                                val light = Brush.radialGradient(
+                                    colorStops = Array(GRIP_FALL.size) { i -> GRIP_FALL[i].first to LinkHandsTone.copy(alpha = (GRIP_FALL[i].second * g).coerceIn(0f, 1f)) },
+                                    center = at, radius = r,
+                                )
+                                ring.rewind()
+                                ring.fillType = PathFillType.NonZero
+                                ring.addOval(androidx.compose.ui.geometry.Rect(at.x - r, at.y - r, at.x + r, at.y + r))
+                                clipPath(ring) { drawPath(weave, light) }
                             }
                         }
                         // The rings: the same dots again, lit only where each ring is right now. Three
@@ -320,9 +323,9 @@ internal fun LinkTrackpad(
                         for (one in ripples) {
                             val t = one.out.value
                             val band = RIPPLE_BAND_DP * density / 3f
-                            // it runs out fast and slows, and dims evenly on the way: seen all the way out
+                            // it runs out fast and slows, and has lost most of its light by halfway: quick, then gone
                             val reach = RIPPLE_REACH_DP * density * one.far * (1f - (1f - t) * (1f - t))
-                            val fade = 1f - t
+                            val fade = (1f - t) * (1f - t)
                             for ((i, share) in RIPPLE_BANDS.withIndex()) {
                                 val inner = (reach - band * 1.5f + band * i).coerceAtLeast(0f)
                                 val outer = reach - band * 1.5f + band * (i + 1)
@@ -522,7 +525,7 @@ private class Ripple(val at: Offset, val far: Float) {
     val out = Animatable(0f)
 }
 
-private const val RIPPLE_MS = 760
+private const val RIPPLE_MS = 440
 private const val RIPPLE_REACH_DP = 150f
 private const val RIPPLE_BAND_DP = 30f
 /** How much brighter than the resting weave (0.07) the dots get at the ring's crest. */
@@ -530,9 +533,12 @@ private const val RIPPLE_LIGHT = 0.5f
 /** The ring's three bands, inside to outside: how much of that light each gets. */
 private val RIPPLE_BANDS = floatArrayOf(0.45f, 1f, 0.45f)
 
-/** How far round a finger the weave is lit while something is held, and its two bands: (share of that, light). */
-private const val GRIP_DP = 92f
-private val GRIP_BANDS = listOf(1f to 0.34f, 0.66f to 0.4f)
+/**
+ * How far round a finger the weave is lit while something is held, and how the light falls away
+ * from the finger to the rim: (share of the way out, light). It ends at none, with no step on the way.
+ */
+private const val GRIP_DP = 112f
+private val GRIP_FALL = listOf(0f to 0.62f, 0.3f to 0.54f, 0.55f to 0.32f, 0.8f to 0.1f, 1f to 0f)
 
 /** How long the mark of a sweep stays. */
 private const val SWEEP_SHOWN_MS = 650L

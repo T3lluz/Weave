@@ -363,7 +363,24 @@ object AppMotion {
          * one leaves as the new one arrives, and it stops without bouncing (the owner asked for
          * a plain slide).
          */
-        fun <T> swipe() = spring<T>(dampingRatio = 1f, stiffness = 400f)
+        fun <T> swipe() = spring<T>(dampingRatio = 1f, stiffness = SWIPE_STIFFNESS)
+        const val SWIPE_STIFFNESS = 400f
+
+        /**
+         * How long after it starts that slide has gone [share] of the way (0 to 1), in ms: the
+         * spring's own curve, 1 - (1 + wt) e^(-wt) with w the root of its stiffness, turned round.
+         * What is felt on the way is timed by it (HapticHelper.slideOver).
+         */
+        fun swipeMs(share: Float): Int {
+            val w = kotlin.math.sqrt(SWIPE_STIFFNESS)
+            var before = 0f
+            var after = 2f
+            repeat(24) {
+                val t = (before + after) / 2f
+                if (1f - (1f + w * t) * kotlin.math.exp(-w * t) < share) before = t else after = t
+            }
+            return (after * 1000f).toInt()
+        }
 
         /** About how long a slide between monitors takes: the picture's box changes shape after it. */
         const val SWIPE_SETTLE_MS = 340L

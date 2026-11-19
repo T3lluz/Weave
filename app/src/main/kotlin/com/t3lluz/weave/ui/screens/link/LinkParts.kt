@@ -192,7 +192,7 @@ internal fun PanelButton(index: Int, icon: ImageVector, label: String, tone: Col
                 scaleY = s
             }
             .pressable(label, onClick)
-            .width(62.dp)
+            .width(PANEL_BUTTON)
             .clip(RoundedCornerShape(20.dp))
             .background(fill)
             .padding(vertical = 7.dp),
@@ -206,8 +206,12 @@ internal fun PanelButton(index: Int, icon: ImageVector, label: String, tone: Col
 
 @Composable
 internal fun PanelDivider() {
-    Box(Modifier.padding(horizontal = 4.dp).size(width = 1.dp, height = 26.dp).background(Color.White.copy(alpha = 0.1f)))
+    Box(Modifier.padding(horizontal = (PANEL_DIVIDER - 1.dp) / 2).size(width = 1.dp, height = 26.dp).background(Color.White.copy(alpha = 0.1f)))
 }
+
+/** How wide a control and a line between them are: the panel's width is known from them before it is unfolded. */
+internal val PANEL_BUTTON = 62.dp
+internal val PANEL_DIVIDER = 9.dp
 
 /** A line that says what just happened, dropping in under the status bar. */
 @Composable

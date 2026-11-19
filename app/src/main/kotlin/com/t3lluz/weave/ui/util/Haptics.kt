@@ -19,6 +19,28 @@ private const val TICK = 7
 private const val LOW_TICK = 8
 
 /**
+ * The ticks of the picture's slide to another monitor: how far along the slide each falls, and
+ * how firm it is. The stretches between them shrink, since the slide slows: in time they come
+ * about 30, 30, 35, 40 and 45 ms apart. Then where it counts as there, and how firm it lands.
+ */
+private val SLIDE_TICKS = listOf(0.10f to 0.62f, 0.31f to 0.55f, 0.52f to 0.47f, 0.70f to 0.39f, 0.83f to 0.31f, 0.92f to 0.24f)
+private const val SLIDE_LANDS = 0.97f
+private const val SLIDE_LANDS_FIRM = 0.55f
+
+/**
+ * How much longer a block takes inside a phrase than the motor says it does. Measured on a
+ * Pixel 10: seven blocks ran 27 ms over what their own times and the pauses came to.
+ */
+private const val MOTOR_LAG_MS = 4
+
+/**
+ * Until when (uptime, ms) a phrase is playing that the trackpad's grain must leave alone: a new
+ * vibration replaces the one playing, and a cancel ends whichever that is.
+ */
+@Volatile private var phraseUntil = 0L
+private fun phrasePlaying() = android.os.SystemClock.uptimeMillis() < phraseUntil
+
+/**
  * Centralized haptic feedback helper optimised for Pixel devices.
  *
  * Uses Android 12+ `CONFIRM`, `REJECT`, `GESTURE_START`, `GESTURE_END`,
@@ -103,9 +125,56 @@ class HapticHelper(
         if (!phrase(Beat(SLOW_RISE, 0.45f), Beat(TICK, 0.5f))) click()
     }
 
-    /** The picture slid over to another monitor: a soft step, lighter than a tap's. */
+    /** One beat of a phrase kept in time with something seen: which block, how firm, and how long after the start it falls. */
+    private class Timed(val block: Int, val firm: Float, val atMs: Int)
+
+    /**
+     * Plays [beats], each at its own time, as one vibration: the motor keeps the time, so none is
+     * late and none is dropped, as beats asked for one by one are when they come faster than the
+     * motor plays them (a tick on its own takes a Pixel some 30 ms). The motor says how long each
+     * block takes, and takes [MOTOR_LAG_MS] longer; one that takes long pushes the next back and
+     * no more. Says how long the phrase runs, or null where the motor can't.
+     */
+    private fun inTime(beats: List<Timed>): Int? {
+        if (Build.VERSION.SDK_INT < 33) return null
+        val m = motor ?: return null
+        return try {
+            val blocks = beats.map { it.block }.distinct().toIntArray()
+            if (!m.areAllPrimitivesSupported(*blocks)) return null
+            val takes = m.getPrimitiveDurations(*blocks)
+            val made = android.os.VibrationEffect.startComposition()
+            var free = 0        // when the motor is done with the beat before
+            for (beat in beats) {
+                val start = maxOf(beat.atMs, free)
+                made.addPrimitive(beat.block, beat.firm, start - free)
+                free = start + takes[blocks.indexOf(beat.block)] + MOTOR_LAG_MS
+            }
+            m.vibrate(made.compose(), android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
+            free
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
+    /**
+     * The picture sliding over to another monitor, played as the slide starts: ticks on the way,
+     * as Essentials' tabs give under a swipe, each where the slide has gone another stretch
+     * ([SLIDE_TICKS]). So they come close and firm while it moves fast, further apart and fainter
+     * as it slows, and a soft step lands it. The trackpad's grain keeps out of its way meanwhile.
+     */
+    fun slideOver() {
+        val runs = inTime(slideBeats)
+        if (runs != null) phraseUntil = android.os.SystemClock.uptimeMillis() + runs else slide()
+    }
+
+    private val slideBeats by lazy {
+        SLIDE_TICKS.map { (share, firm) -> Timed(TICK, firm, com.t3lluz.weave.ui.theme.AppMotion.Link.swipeMs(share)) } +
+            Timed(LOW_TICK, SLIDE_LANDS_FIRM, com.t3lluz.weave.ui.theme.AppMotion.Link.swipeMs(SLIDE_LANDS))
+    }
+
+    /** The picture went over to another monitor with nothing to see slide: a soft step, lighter than a tap's. */
     fun slide() {
-        if (!phrase(Beat(LOW_TICK, 0.7f))) tick()
+        if (!phrase(Beat(LOW_TICK, 0.6f))) tick()
     }
 
     /** A slider crossed one of its marks: the faintest tick there is. */
@@ -427,6 +496,8 @@ class PaperFeel(context: android.content.Context) {
         main.removeCallbacks(rest)
         main.postDelayed(rest, grain.restMs)
         val stretch = grain.glide(dp) ?: return
+        // a phrase is playing (the picture sliding to another monitor): it is not cut off for the grain
+        if (phrasePlaying()) return
         // an empty stretch: the finger has slowed to a creep, and the grain goes with it
         if (stretch.steps.isEmpty()) runCatching { vibrator?.cancel() } else play(stretch)
     }
@@ -439,7 +510,8 @@ class PaperFeel(context: android.content.Context) {
 
     private fun stop() {
         grain.rested()
-        runCatching { vibrator?.cancel() }
+        // the grain's own stretch has run out by itself by the time a phrase over it has
+        if (!phrasePlaying()) runCatching { vibrator?.cancel() }
     }
 
     @androidx.annotation.RequiresApi(36)

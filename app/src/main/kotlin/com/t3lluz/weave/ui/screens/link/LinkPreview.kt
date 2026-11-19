@@ -60,6 +60,7 @@ import com.t3lluz.weave.ui.theme.AppIcons
 import com.t3lluz.weave.ui.theme.LinkScreenTone
 import com.t3lluz.weave.ui.theme.AppMotion
 import com.t3lluz.weave.ui.theme.TextSecondary
+import com.t3lluz.weave.ui.util.rememberHaptics
 import com.t3lluz.weave.ui.util.rememberReducedMotion
 import kotlinx.coroutines.delay
 
@@ -108,6 +109,7 @@ internal fun LinkPreview(
     val live by video.live.collectAsState()
     val switched by video.switched.collectAsState()
     val reduced = rememberReducedMotion()
+    val haptics = rememberHaptics()
     val density = LocalDensity.current
     var view by remember { mutableStateOf<LinkTextureView?>(null) }
     var still by remember { mutableStateOf<Still?>(null) }
@@ -132,6 +134,8 @@ internal fun LinkPreview(
             }
             awaited = id
             waiting = shot != null
+            // nothing to slide from, so nothing to feel on the way: the one soft step
+            if (shot == null) haptics.slide()
         }
         video.beforeSwitch = grab
         // a rotation puts the new preview in before the old one leaves: only unhook our own
@@ -142,7 +146,15 @@ internal fun LinkPreview(
         val mine = still
         slide.snapTo(0f)
         waiting = false
-        slide.animateTo(1f, if (reduced || mine == null || (mine.dx == 0 && mine.dy == 0)) AppMotion.Link.swap() else AppMotion.Link.swipe())
+        if (reduced || mine == null || (mine.dx == 0 && mine.dy == 0)) {
+            // one picture fading into the other: nothing travels, one soft step
+            haptics.slide()
+            slide.animateTo(1f, AppMotion.Link.swap())
+        } else {
+            // the slide under the thumb: ticks timed to this spring, and a soft step as it comes to rest
+            haptics.slideOver()
+            slide.animateTo(1f, AppMotion.Link.swipe())
+        }
         // a switch that came on top of this one has its own still: leave it
         if (still === mine) still = null
     }

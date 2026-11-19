@@ -53,6 +53,11 @@ class LinkViewModel @Inject constructor(
     /** Full screen: the laptop's screen is a touchscreen (true) or the whole phone is a trackpad. */
     var touchMode by mutableStateOf(false)
 
+    /** Full screen: where the panel's bubble was left; see [LinkPrefs.panelSpot]. */
+    var panelSpot: Pair<Float, Float>
+        get() = prefs.panelSpot
+        set(value) { prefs.panelSpot = value }
+
     /** Preview zoom over "fits the area", or null to use the setting's default. */
     var zoom by mutableStateOf<Float?>(null)
 

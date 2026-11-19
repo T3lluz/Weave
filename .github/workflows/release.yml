@@ -7,11 +7,12 @@ name: Release APK
 on:
   push:
     branches: [master]
-    # the computer side and the website don't change the app: no new APK for them
+    # the computer side, the website and the repo's own icon don't change the app: no new APK for them
     paths-ignore:
       - 'computer/**'
       - 'site/**'
       - 'deploy/**'
+      - 'assets/**'
       - '**.md'
   workflow_dispatch:
 
