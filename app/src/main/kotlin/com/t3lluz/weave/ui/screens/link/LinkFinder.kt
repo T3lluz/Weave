@@ -291,7 +291,7 @@ private fun RemoveQuestion(name: String, onRemove: () -> Unit, onDismiss: () -> 
             )
         },
         confirmButton = {
-            PillButton(icon = AppIcons.Trash, label = "Remove", accent = Error, emphasized = true, onClick = { haptics.confirm(); onRemove() })
+            PillButton(icon = AppIcons.Trash, label = "Remove", accent = Error, emphasized = true, onClick = { haptics.removed(); onRemove() })
         },
         dismissButton = { PillButton(icon = AppIcons.Close, label = "Keep it", accent = TextSecondary, onClick = onDismiss) },
     )

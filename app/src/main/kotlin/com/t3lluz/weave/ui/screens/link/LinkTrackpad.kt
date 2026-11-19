@@ -224,6 +224,8 @@ internal fun LinkTrackpad(
     // a dent per finger: where each is and how far the cloth is pressed there, read only while drawing
     val dents = remember { List(DENTS) { Dent() } }
     var anyFinger by remember { mutableStateOf(false) }
+    // a tap sends a ring out through the weave from where it landed (filled in below)
+    var onTapAt: (Offset) -> Unit = {}
     // two fingers just flicked sideways: which way (true is back), and a count so the same way twice shows twice
     var swept by remember { mutableStateOf<Boolean?>(null) }
     var sweeps by remember { mutableIntStateOf(0) }
@@ -281,7 +283,13 @@ internal fun LinkTrackpad(
                 }
                 .trackpad(
                     session, config.speed, config.naturalScroll,
-                    onTick = haptics::tick, onHold = haptics::click, onTouched = { viewModel.touched = true },
+                    onTick = haptics::tick, onHold = haptics::grab, onTouched = { viewModel.touched = true },
+                    // a tick for each finger of a tap, so the hand knows which button it pressed
+                    onTap = { fingers, at ->
+                        haptics.taps(fingers)
+                        onTapAt(at)
+                    },
+                    onDrop = haptics::drop,
                     onGlide = paper::glide,
                     onFingers = { fingers ->
                         if (fingers.isEmpty()) paper.lift()
@@ -291,7 +299,7 @@ internal fun LinkTrackpad(
                     },
                     nativePad = nativePad,
                     onSweep = { back ->
-                        haptics.thresholdActivate()
+                        haptics.swoosh()
                         swept = back
                         sweeps++
                     },

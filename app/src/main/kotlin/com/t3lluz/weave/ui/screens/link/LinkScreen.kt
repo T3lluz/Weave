@@ -162,6 +162,23 @@ fun LinkScreen(
     var raisedForField by remember { mutableStateOf(false) }
     val geometry = remember { PreviewGeometry() }
 
+    // The link's comings and goings, felt: a knock answered when the computer is there, one soft
+    // step down when it drops (it comes back by itself), a tick when it is back.
+    val linkHaptics = rememberHaptics()
+    var statusWas by remember { mutableStateOf(state.status) }
+    LaunchedEffect(state.status) {
+        val was = statusWas
+        statusWas = state.status
+        when {
+            state.status == LinkStatus.Online && was == LinkStatus.Reconnecting -> linkHaptics.back()
+            state.status == LinkStatus.Online && was != LinkStatus.Online -> {
+                if (viewModel.justPaired) linkHaptics.paired() else linkHaptics.connected()
+                viewModel.justPaired = false
+            }
+            state.status == LinkStatus.Reconnecting && was == LinkStatus.Online -> linkHaptics.lost()
+        }
+    }
+
     // While the remote is up, Android's back does not leave it: a swipe in from the side belongs to
     // the trackpad, and one that the system takes anyway must not end the session. The arrow in the
     // corner is the way out; back says so, once in a while.

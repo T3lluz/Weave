@@ -231,8 +231,12 @@ class LinkViewModel @Inject constructor(
         pair(invite)
     }
 
+    /** A computer was just paired by its code: its first welcome is one to mark. */
+    var justPaired by mutableStateOf(false)
+
     private fun pair(invite: com.t3lluz.weave.data.link.LinkInvite) {
         shortcutSheet = null
+        justPaired = true
         // always a new key: an invitation says where to connect, and a token made for another
         // computer must never go to an address a code brought
         prefs.update {

@@ -84,6 +84,10 @@ fun Modifier.trackpad(
     onSweep: (back: Boolean) -> Unit = {},
     /** A finger (or the fingers together) went this many dp further over the pad: for its paper feel. */
     onGlide: (Float) -> Unit = {},
+    /** A tap, with how many fingers and where the last of them was: for a tick per finger and a ripple. */
+    onTap: (fingers: Int, at: Offset) -> Unit = { _, _ -> onTick() },
+    /** A drag that was held is let go. */
+    onDrop: () -> Unit = {},
 ): Modifier = pointerInput(session, speed, naturalScroll, nativePad) {
     val slop = viewConfiguration.touchSlop
     val notch = DP_PER_NOTCH * density
@@ -98,6 +102,8 @@ fun Modifier.trackpad(
             onFingers(listOf(down.id.value to down.position))
             val startedAt = SystemClock.uptimeMillis()
             var fingers = 1
+            // where the fingers were last seen (their middle), for the ripple a tap sends out
+            var lastAt = down.position
             var travelled = Offset.Zero
             var moved = false
             var scrolled = false
@@ -137,6 +143,7 @@ fun Modifier.trackpad(
                     if (pressed.isEmpty()) break
                     // the cloth dents under each finger
                     onFingers(pressed.map { it.id.value to it.position })
+                    lastAt = pressed.fold(Offset.Zero) { sum, it -> sum + it.position } / pressed.size.toFloat()
                     if (pressed.size > fingers) fingers = pressed.size
                     if (pressed.size < 2) {
                         landed.clear()
@@ -219,7 +226,10 @@ fun Modifier.trackpad(
                 onFingers(emptyList())
                 if (onPad) session.touch(emptyList(), naturalScroll)
                 // a drag cut short (the phone turned, the sheet opened) must not leave the laptop's button held
-                if (dragging) session.button("left", false)
+                if (dragging) {
+                    session.button("left", false)
+                    onDrop()
+                }
             }
             // a drag's button was let go in the finally above; a scroll may roll on, a tap clicks
             if (!dragging && scrolled) {
@@ -238,7 +248,7 @@ fun Modifier.trackpad(
                     }
                 }
             } else if (!dragging && !moved && SystemClock.uptimeMillis() - startedAt < TAP_MS) {
-                onTick()
+                onTap(fingers.coerceIn(1, 3), lastAt)
                 session.click(
                     when (fingers) {
                         1 -> "left"
