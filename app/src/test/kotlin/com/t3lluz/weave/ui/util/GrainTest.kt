@@ -8,74 +8,79 @@ import org.junit.Test
 
 class GrainTest {
     private var clock = 1_000L
-    private fun grain(chance: () -> Float = { 0.5f }) = Grain(tickMs = 12, chance = chance, now = { clock })
+    private fun grain(chance: () -> Float = { 0.5f }) = Grain(stepMs = 20, chance = chance, now = { clock })
 
     @Test
-    fun aMovingFingerGetsRunAfterRunWithNoGapBetweenThem() {
+    fun aSteadyStrokeIsOneUnbrokenStretchNotAStringOfThem() {
         val g = grain()
-        var playingUntil = 0L
-        var silent = 0L
-        var runs = 0
-        // a finger at 0.5 dp a millisecond, told of every 8 ms, for a second
-        for (step in 0 until 125) {
+        var starts = 0
+        // a finger at 0.5 dp a millisecond, told of every 8 ms, for a second and a half
+        repeat(187) {
             clock += 8
-            val run = g.glide(4f)
-            if (clock > playingUntil && run == null && playingUntil != 0L) silent += 8
-            if (run != null) {
-                runs++
-                assertEquals(Grain.RUN, run.size)
-                playingUntil = clock + run.sumOf { 12 + it.waitMs }
+            if (g.glide(4f) != null) starts++
+        }
+        assertTrue("it starts, settles to its pace, and is left to play: $starts", starts in 1..2)
+    }
+
+    @Test
+    fun aStretchIsRenewedJustBeforeItRunsOut() {
+        val g = grain()
+        var startedAt = 0L
+        var renewedAfter = 0L
+        repeat(400) {
+            clock += 8
+            if (g.glide(4f) != null) {
+                if (startedAt != 0L && renewedAfter == 0L && clock - startedAt > 1_000) renewedAfter = clock - startedAt
+                startedAt = clock
             }
         }
-        assertTrue("about one run every forty ms, got $runs", runs in 20..32)
-        assertTrue("never silent for longer than it takes to hear of the next move, was $silent ms in all", silent <= 16)
+        val whole = Grain.STEPS * 20L
+        assertTrue("before the end, not long before: $renewedAfter of $whole", renewedAfter in (whole - 60)..whole)
     }
 
     @Test
-    fun aRestingFingerGetsNothing() {
+    fun aRestingFingerStartsNothingAndTheNextMoveStartsAfresh() {
         val g = grain()
         clock += 8
-        assertNotNull(g.glide(3f))
-        clock += 200
-        assertNull("no move, no grain", g.glide(0f))
         assertNull("a tremble is not a stroke", g.glide(0.1f))
-    }
-
-    @Test
-    fun aFasterStrokeIsFirmerAndNeitherIsLoud() {
-        val slow = grain()
+        assertNull(g.glide(0f))
         clock += 8
-        val faint = slow.glide(0.8f)!!.maxOf { it.firm }
-        val fast = grain()
-        var firm = 0f
-        repeat(40) {
-            clock += 8
-            fast.glide(12f)?.let { run -> firm = run.maxOf { it.firm } }
-        }
-        assertTrue("$faint < $firm", faint < firm)
-        assertTrue(firm <= Grain.FIRM)
-        assertTrue(faint >= Grain.FAINT * 0.6f)
+        assertNotNull(g.glide(3f))
+        g.rested()
+        clock += 300
+        assertNull(g.glide(0.2f))
+        clock += 8
+        assertNotNull("it has to move on before it is felt again", g.glide(1f))
     }
 
     @Test
-    fun noTwoTicksAreQuiteAlike() {
+    fun aFasterStrokeIsStrongerAndStartsOverOnlyOnceItHasPlayedAWhile() {
+        val g = grain()
+        clock += 8
+        val slow = g.glide(0.8f)!!.steps.maxOf { it.strength }
+        var fast = 0f
+        var changes = 0
+        repeat(60) {
+            clock += 8
+            g.glide(14f)?.let { stretch ->
+                fast = stretch.steps.maxOf { it.strength }
+                changes++
+            }
+        }
+        assertTrue("$slow < $fast", slow < fast)
+        assertEquals("once to the faster pace, not at every step on the way there", 1, changes)
+        assertTrue(fast <= Grain.STRENGTH.last())
+    }
+
+    @Test
+    fun theGrainWandersAndStaysHigh() {
         var roll = 0f
         val g = grain { roll.also { roll = (roll + 0.37f) % 1f } }
         clock += 8
-        val run = g.glide(3f)!!
-        assertTrue(run.map { it.firm }.toSet().size > 1)
-        assertTrue(run.all { it.waitMs in 0..Grain.GAP_MS.toInt() })
-    }
-
-    @Test
-    fun aLiftStartsTheNextStrokeAtOnce() {
-        val g = grain()
-        clock += 8
-        assertNotNull(g.glide(3f))
-        clock += 8
-        assertNull("the run still plays", g.glide(3f))
-        g.lift()
-        clock += 8
-        assertNotNull(g.glide(3f))
+        val stretch = g.glide(3f)!!
+        assertEquals(Grain.STEPS, stretch.steps.size)
+        assertTrue(stretch.steps.map { it.strength }.toSet().size > 2)
+        assertTrue(stretch.steps.all { it.sharp >= Grain.SHARP_FROM && it.sharp <= 1f })
+        assertTrue(stretch.steps.all { it.strength > 0f })
     }
 }
