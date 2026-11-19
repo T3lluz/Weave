@@ -129,45 +129,73 @@ fun rememberHaptics(): HapticHelper {
 
 
 
+/** One soft tick of the grain: how firm (0..1), and how long after the one before it ends. */
+data class Tick(val firm: Float, val waitMs: Int)
+
 /**
- * When a finger gliding over a surface would feel its grain: one faint tick every few dp of
- * travel, each a little nearer or further and a little fainter or firmer than the last, so it
- * reads as a texture and not as a buzz. Never more often than the motor can keep apart.
+ * What a finger sliding over paper feels: a fine grain that never quite stops while it moves.
+ * It is played as short runs of soft ticks, each run handed over just before the last one
+ * ends, so there is no gap to feel between them. Within a run every tick is a little firmer or
+ * fainter than its neighbour and a hair nearer or further, which is what makes it a texture
+ * and not a buzz. A faster stroke is firmer, as paper is louder under a faster hand. A finger
+ * that rests gets nothing: a run is only started once it has moved on.
  *
- * [chance] gives numbers from 0 to 1, [now] the time in ms; both are handed in so this can be
- * tested without a phone.
+ * [tickMs] is how long the phone's motor takes over one tick. [chance] gives numbers from 0 to
+ * 1 and [now] the time in ms; both are handed in so this can be tested without a phone.
  */
 class Grain(
-    private val everyDp: Float = 3.4f,
-    private val strength: Float = 0.13f,
-    private val minGapMs: Long = 14,
+    private val tickMs: Int = 12,
     private val chance: () -> Float = { kotlin.random.Random.nextFloat() },
     private val now: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
-    private var toNext = everyDp
+    private var travelled = 0f
+    private var speed = 0f          // dp a millisecond, smoothed
     private var lastAt = 0L
+    private var nextAt = 0L
 
-    /** The finger went [dp] further: how firm a tick is due (0..1), or null when none is. */
-    fun glide(dp: Float): Float? {
+    /** The finger went [dp] further: the run of ticks to play now, or null while the last one still plays. */
+    fun glide(dp: Float): List<Tick>? {
         if (dp <= 0f) return null
-        toNext -= dp
-        if (toNext > 0f) return null
-        toNext = everyDp * (0.55f + 0.9f * chance())
         val at = now()
-        // a fast stroke would ask for hundreds a second: past this they run together, so they are thinned
-        if (at - lastAt < minGapMs) return null
+        val since = (at - lastAt).coerceIn(1, 60)
         lastAt = at
-        return strength * (0.6f + 0.8f * chance())
+        speed = speed * 0.6f + dp / since * 0.4f
+        travelled += dp
+        // not while the last run plays, and not for a finger that has barely moved since it started
+        if (at < nextAt || travelled < MOVED_DP) return null
+        travelled = 0f
+        val firm = FAINT + (FIRM - FAINT) * (speed / FAST_DP_PER_MS).coerceIn(0f, 1f)
+        val run = List(RUN) { Tick(firm * (0.62f + 0.38f * chance()), (chance() * GAP_MS).toInt()) }
+        // the next run starts a moment before this one is over, so they join
+        nextAt = at + run.sumOf { tickMs + it.waitMs } - JOIN_MS
+        return run
     }
 
-    /** The finger lifted: the next stroke starts its grain afresh. */
+    /** The finger lifted: the next stroke starts afresh, at once. */
     fun lift() {
-        toNext = everyDp
+        travelled = 0f
+        speed = 0f
+        nextAt = 0L
+    }
+
+    companion object {
+        /** Ticks in a run: short, so the grain stops within a few hundredths of a second of the finger. */
+        const val RUN = 3
+        /** The longest pause between two ticks of a run. */
+        const val GAP_MS = 3f
+        /** How much earlier than its end a run hands over to the next. */
+        const val JOIN_MS = 5
+        /** How far the finger has to go before another run: a resting finger's tremble is less. */
+        const val MOVED_DP = 0.4f
+        /** How firm the grain is under a slow finger and under a fast one (of the motor's soft tick). */
+        const val FAINT = 0.17f
+        const val FIRM = 0.36f
+        const val FAST_DP_PER_MS = 1.0f
     }
 }
 
 /**
- * Paper under the finger: the trackpad's surface, felt. A phone whose motor can play the faint
+ * Paper under the finger: the trackpad's surface, felt. A phone whose motor can play the soft
  * tick this is made of (Pixels can) gets it; any other gets nothing, since a plain buzz is not
  * what paper feels like. It is touch feedback to the system, so turning that off in the phone's
  * settings turns this off too.
@@ -181,29 +209,41 @@ class PaperFeel(context: android.content.Context) {
         }
     private val can = Build.VERSION.SDK_INT >= 31 &&
         vibrator?.areAllPrimitivesSupported(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK) == true
-    private val grain = Grain()
+    private val grain = Grain(tickMs = tickMs())
+
+    /** How long this phone's motor takes over the soft tick; a usual value where it doesn't say. */
+    private fun tickMs(): Int {
+        if (!can || Build.VERSION.SDK_INT < 31) return 12
+        val said = runCatching { vibrator?.getPrimitiveDurations(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK)?.firstOrNull() }.getOrNull() ?: 0
+        return if (said in 4..60) said else 12
+    }
 
     fun glide(dp: Float) {
         if (!can) return
-        val firm = grain.glide(dp) ?: return
-        play(firm)
+        val run = grain.glide(dp) ?: return
+        play(run)
     }
 
     fun lift() = grain.lift()
 
     @androidx.annotation.RequiresApi(31)
-    private fun effect(firm: Float) = android.os.VibrationEffect.startComposition()
-        .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, firm.coerceIn(0.01f, 1f)).compose()
+    private fun effect(run: List<Tick>): android.os.VibrationEffect {
+        val made = android.os.VibrationEffect.startComposition()
+        for (tick in run) {
+            made.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, tick.firm.coerceIn(0.01f, 1f), tick.waitMs)
+        }
+        return made.compose()
+    }
 
-    private fun play(firm: Float) {
+    private fun play(run: List<Tick>) {
         val v = vibrator ?: return
         try {
             if (Build.VERSION.SDK_INT >= 33) {
-                v.vibrate(effect(firm), android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
+                v.vibrate(effect(run), android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
             } else if (Build.VERSION.SDK_INT >= 31) {
                 @Suppress("DEPRECATION")
                 v.vibrate(
-                    effect(firm),
+                    effect(run),
                     android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).build(),
                 )
             }
