@@ -121,7 +121,11 @@ internal fun LinkFinder(
     onSettings: () -> Unit,
     onWake: () -> Unit = {},
     onScan: () -> Unit = {},
+    /** Takes a computer this phone knows off its list, by its key. */
+    onRemove: (String) -> Unit = {},
 ) {
+    // the computer asked about before it is taken off the list
+    var removing by remember { mutableStateOf<LinkHost?>(null) }
     var typing by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -199,6 +203,8 @@ internal fun LinkFinder(
                     onClick = { onPick(laptop) }, onRetry = onRetry, onForget = onForget,
                     modifier = Modifier.riseIn(index++, rise),
                     onWake = onWake.takeIf { mine && config.wakeMac.isNotBlank() },
+                    // one of this phone's own can be taken off its list; the rest are only passing by
+                    onRemove = if (laptop.key.isNotBlank()) ({ removing = laptop }) else null,
                 )
             }
             if (!laptops.loaded && !picked) {
@@ -256,6 +262,39 @@ internal fun LinkFinder(
             Spacer(Modifier.height(16.dp))
         }
     }
+    removing?.let { laptop ->
+        RemoveQuestion(
+            laptop.name,
+            onRemove = {
+                removing = null
+                onRemove(laptop.key)
+            },
+            onDismiss = { removing = null },
+        )
+    }
+}
+
+/** Asked before a computer is taken off the list: it is one tap away from the row's chevron. */
+@Composable
+private fun RemoveQuestion(name: String, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    val haptics = rememberHaptics()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Surface,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+        title = { Text("Remove $name?", style = HealthDisplay, fontSize = 22.sp) },
+        text = {
+            Text(
+                "It leaves this phone's list, and this phone can't reach it any more. To use it again, run weave pair on it and scan the code.",
+                fontSize = 14.sp, lineHeight = 20.sp,
+            )
+        },
+        confirmButton = {
+            PillButton(icon = AppIcons.Trash, label = "Remove", accent = Error, emphasized = true, onClick = { haptics.confirm(); onRemove() })
+        },
+        dismissButton = { PillButton(icon = AppIcons.Close, label = "Keep it", accent = TextSecondary, onClick = onDismiss) },
+    )
 }
 
 /** The sentence over the list, and a line under it: how things stand, in words. */
@@ -289,6 +328,8 @@ private fun LaptopRoom(
     modifier: Modifier = Modifier,
     /** Wakes it from sleep, for the laptop whose network card the phone knows; null for the rest. */
     onWake: (() -> Unit)? = null,
+    /** Asks to take it off this phone's list; null for one that isn't on it. */
+    onRemove: (() -> Unit)? = null,
 ) {
     val haptics = rememberHaptics()
     val context = LocalContext.current
@@ -337,6 +378,16 @@ private fun LaptopRoom(
                         color = if (stuck) Error else TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+            if (onRemove != null && !trying && !waiting) {
+                // quiet beside the row's own tap: a bin, which asks before it does anything
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).pressable("Remove $name from this phone", onRemove),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(AppIcons.Trash, null, tint = TextTertiary, modifier = Modifier.size(17.dp))
+                }
+                Spacer(Modifier.width(6.dp))
             }
             if (!trying && !waiting && !stuck) {
                 Box(Modifier.size(36.dp).clip(CircleShape).background(LinkScreenTone.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {

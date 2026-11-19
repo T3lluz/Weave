@@ -89,10 +89,14 @@ def addresses(tailnet: list[str] | None = None, cards: list[str] | None = None) 
     return out + ([name] if name and name not in out else [])
 
 
-def invite(name: str, addrs: list[str], port: int, code: str) -> str:
+def invite(name: str, addrs: list[str], port: int, code: str, ident: str = "") -> str:
     """The link a phone opens to pair. Everything rides in the fragment, which a browser never
-    sends to the server it loads the page from."""
-    return PAIR_URL + "#" + urlencode({"n": name, "a": ",".join(addrs), "p": port, "c": code})
+    sends to the server it loads the page from. [ident] is this computer's own id, the one its
+    welcome gives too: a phone that has it already says so instead of pairing a second time."""
+    fields = {"n": name, "a": ",".join(addrs), "p": port, "c": code}
+    if ident:
+        fields["i"] = ident
+    return PAIR_URL + "#" + urlencode(fields)
 
 
 def qr_text(data: str) -> str:

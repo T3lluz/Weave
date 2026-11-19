@@ -98,6 +98,7 @@ class LinkViewModel @Inject constructor(
             it.copy(
                 host = laptop.addresses.joinToString(","), port = laptop.port, name = laptop.name, ticket = laptop.ticket,
                 key = known?.key ?: prefs.newKey(), wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty(),
+                ident = known?.ident.orEmpty(),
                 // picked from the dashboard's list: its id there is what ties the two from now on
                 board = if (laptop.fromDashboard) laptop.id else known?.board.orEmpty(),
             )
@@ -114,7 +115,7 @@ class LinkViewModel @Inject constructor(
 
     fun disconnect() {
         shortcutSheet = null
-        prefs.update { it.copy(host = "", name = "", ticket = "", key = "", board = "", wakeMac = "", wakeBroadcast = "") }
+        prefs.update { it.copy(host = "", name = "", ticket = "", key = "", board = "", ident = "", wakeMac = "", wakeBroadcast = "") }
         session.stop()
         // the laptop tells the dashboard it is free within a moment; ask again then, so the
         // list doesn't say this phone is still using it
@@ -152,8 +153,57 @@ class LinkViewModel @Inject constructor(
     var offered by mutableStateOf<com.t3lluz.weave.data.link.LinkInvite?>(null)
         private set
 
+    /** A code was scanned for a computer this phone has already: said instead of pairing it twice. */
+    var alreadyPaired by mutableStateOf<com.t3lluz.weave.data.link.KnownComputer?>(null)
+        private set
+
     fun offer(invite: com.t3lluz.weave.data.link.LinkInvite) {
-        offered = invite
+        // the picked computer counts too, while it still waits to be let in
+        val cfg = prefs.config.value
+        val picked = com.t3lluz.weave.data.link.KnownComputer(cfg.name, cfg.host, cfg.port, key = cfg.key, ident = cfg.ident)
+            .takeIf { cfg.host.isNotBlank() && prefs.known.value.none { k -> k.key == cfg.key } }
+        val known = com.t3lluz.weave.data.link.alreadyKnown(invite, prefs.known.value + listOfNotNull(picked))
+        if (known != null) alreadyPaired = known else offered = invite
+    }
+
+    fun dismissAlreadyPaired() {
+        alreadyPaired = null
+    }
+
+    /** Whether [computer] is the one this phone is connected to right now. */
+    fun isConnectedTo(computer: com.t3lluz.weave.data.link.KnownComputer): Boolean =
+        prefs.config.value.key == computer.key && session.state.value.status == com.t3lluz.weave.data.link.LinkStatus.Online
+
+    /** Connects to the computer a scanned code turned out to be for, as it is saved. */
+    fun connectAlreadyPaired() {
+        val k = alreadyPaired ?: return
+        alreadyPaired = null
+        if (isConnectedTo(k)) return
+        if (prefs.config.value.key == k.key) {
+            session.reconnect()
+            return
+        }
+        connectTo(
+            LinkHost(
+                id = "known:${k.key}", name = k.name, addresses = k.host.split(',').map { it.trim() }.filter { it.isNotEmpty() },
+                port = k.port, ticket = k.ticket, online = true, busy = false, key = k.key, board = k.board,
+            ),
+        )
+    }
+
+    /**
+     * Takes a computer off this phone's list. The one in use is let go of as well. It can be
+     * paired again with a code; until then the phone has nothing of it.
+     */
+    fun remove(key: String) {
+        if (key.isBlank()) return
+        prefs.forget(key)
+        if (prefs.config.value.key == key) {
+            disconnect()
+        } else {
+            looking?.cancel()
+            findLaptops()
+        }
     }
 
     fun declineOffer() {
@@ -173,7 +223,7 @@ class LinkViewModel @Inject constructor(
         // computer must never go to an address a code brought
         prefs.update {
             it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code,
-                key = prefs.newKey(), board = "", wakeMac = "", wakeBroadcast = "")
+                key = prefs.newKey(), board = "", ident = invite.id, wakeMac = "", wakeBroadcast = "")
         }
         session.reconnect()
     }
@@ -185,7 +235,7 @@ class LinkViewModel @Inject constructor(
         val known = prefs.known.value.firstOrNull { it.host == typed && it.port == port }
         prefs.update {
             it.copy(host = typed, port = port, name = known?.name ?: typed, ticket = "", key = known?.key ?: prefs.newKey(),
-                board = known?.board.orEmpty(), wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty())
+                board = known?.board.orEmpty(), ident = known?.ident.orEmpty(), wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty())
         }
         session.reconnect()
     }

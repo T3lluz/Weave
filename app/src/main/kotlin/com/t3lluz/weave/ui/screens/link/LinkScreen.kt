@@ -387,6 +387,10 @@ fun LinkScreen(
                         toast = "Waking $laptopName. Give it a few seconds."
                     },
                     onScan = { scanInvite(context, viewModel::offer) { toast = it } },
+                    onRemove = { key ->
+                        viewModel.remove(key)
+                        toast = "Removed from this phone"
+                    },
                 )
                 landscape -> Sideways(
                     viewModel = viewModel, state = state, config = config, geometry = geometry, hazeState = hazeState,
@@ -417,6 +421,13 @@ fun LinkScreen(
         // A code was scanned or a link opened: nothing connects until the owner says so.
         viewModel.offered?.let { invite ->
             PairQuestion(invite, onPair = viewModel::acceptOffer, onDismiss = viewModel::declineOffer)
+        }
+        // The code was for a computer this phone has already: one machine is one entry.
+        viewModel.alreadyPaired?.let { computer ->
+            AlreadyPaired(
+                computer.name, connected = viewModel.isConnectedTo(computer),
+                onConnect = viewModel::connectAlreadyPaired, onDismiss = viewModel::dismissAlreadyPaired,
+            )
         }
     }
 
@@ -794,6 +805,34 @@ private fun PairQuestion(invite: com.t3lluz.weave.data.link.LinkInvite, onPair: 
         },
         confirmButton = { PillButton(icon = AppIcons.Check, label = "Pair", accent = LinkScreenTone, emphasized = true, onClick = onPair) },
         dismissButton = { PillButton(icon = AppIcons.Close, label = "Not now", accent = TextSecondary, onClick = onDismiss) },
+    )
+}
+
+/** A scanned code turned out to be for a computer this phone has already: said, with the way on. */
+@Composable
+private fun AlreadyPaired(name: String, connected: Boolean, onConnect: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Surface,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+        title = { Text(if (connected) "Already connected to $name" else "$name is already paired", style = HealthDisplay, fontSize = 22.sp) },
+        text = {
+            Column {
+                Text(
+                    if (connected) "This phone is using it right now. There is nothing to pair."
+                    else "This phone has it already, so the code wasn't used. You can connect to it as it is.",
+                    fontSize = 14.sp, lineHeight = 20.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("To pair it afresh, remove it from the list first, then scan a code.", fontSize = 13.sp, lineHeight = 18.sp, color = TextTertiary)
+            }
+        },
+        confirmButton = {
+            if (connected) PillButton(icon = AppIcons.Check, label = "OK", accent = LinkScreenTone, emphasized = true, onClick = onDismiss)
+            else PillButton(icon = AppIcons.Link, label = "Connect", accent = LinkScreenTone, emphasized = true, onClick = onConnect)
+        },
+        dismissButton = { if (!connected) PillButton(icon = AppIcons.Close, label = "Not now", accent = TextSecondary, onClick = onDismiss) },
     )
 }
 

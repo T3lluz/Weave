@@ -15,7 +15,11 @@ import org.json.JSONObject
  * this phone in once without the computer asking its owner; the addresses are every way the
  * computer can be reached, tried in order.
  */
-data class LinkInvite(val name: String, val addresses: List<String>, val port: Int, val code: String)
+data class LinkInvite(
+    val name: String, val addresses: List<String>, val port: Int, val code: String,
+    /** The computer's own id, as its welcome gives it too; blank from a computer that doesn't say. */
+    val id: String = "",
+)
 
 /**
  * Reads an invitation from what a scan or a tapped link gives: the page's address with the
@@ -37,8 +41,26 @@ fun parseInvite(text: String?): LinkInvite? {
     // the code is what the computer made: letters, digits, - and _. Anything else is not one of its
     if (addresses.isEmpty() || !CODE.matches(code)) return null
     val port = fields["p"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: LinkProtocol.PORT
-    return LinkInvite(fields["n"].orEmpty().take(60).ifBlank { addresses.last() }, addresses, port, code)
+    return LinkInvite(
+        fields["n"].orEmpty().take(60).ifBlank { addresses.last() }, addresses, port, code,
+        id = fields["i"].orEmpty().takeIf { CODE.matches(it) }.orEmpty(),
+    )
 }
+
+/**
+ * The computer of [known] that [invite] is for, when this phone has it already: pairing it again
+ * would only make a second entry for the same machine.
+ *
+ * By the computer's own id when both say one. Where one of them doesn't (a computer paired
+ * before ids, or by its address), by an address and the port they share. Two with different
+ * ids are two computers, whatever addresses they share: home networks hand out the same ones.
+ */
+internal fun alreadyKnown(invite: LinkInvite, known: List<KnownComputer>): KnownComputer? =
+    known.firstOrNull { it.ident.isNotBlank() && it.ident == invite.id }
+        ?: known.firstOrNull { k ->
+            (k.ident.isBlank() || invite.id.isBlank()) && k.port == invite.port &&
+                k.host.split(',').map { it.trim() }.any { it.isNotEmpty() && it in invite.addresses }
+        }
 
 private val CODE = Regex("^[A-Za-z0-9_-]{1,64}$")
 

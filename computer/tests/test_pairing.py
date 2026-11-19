@@ -58,6 +58,12 @@ class Invitation(unittest.TestCase):
                 mock.patch.object(pairing.socket, "socket", side_effect=OSError):
             self.assertEqual(pairing.addresses(["100.64.0.7"], cards=["10.0.0.4"]), ["10.0.0.4", "100.64.0.7", "box"])
 
+    def test_the_link_carries_the_computers_own_id_when_it_has_one(self):
+        from urllib.parse import parse_qs
+        link = pairing.invite("box", ["192.168.1.5"], 47600, "abc", "a1b2c3")
+        self.assertEqual(parse_qs(link.split("#", 1)[1])["i"], ["a1b2c3"])
+        self.assertNotIn("i=", pairing.invite("box", ["192.168.1.5"], 47600, "abc"))
+
     def test_the_code_on_screen_has_a_quiet_border_and_square_modules(self):
         text = pairing.qr_text(pairing.invite("box", ["192.168.1.5"], 47600, "abcDEF123456"))
         lines = [line.replace("\x1b[30;107m", "").replace("\x1b[0m", "") for line in text.splitlines()]

@@ -1073,6 +1073,8 @@ class Daemon:
         mons = await hypr.monitors()
         session.send_json({
             "t": "welcome", "host": self.host, "ver": __version__, "laptopSound": bool(self.cfg["remote"]["sound"]),
+            # this computer's own id (made once, kept): how a phone knows one it has already
+            "id": str(getattr(self.dashboard, "id", "")),
             "monitors": monitor_list(mons),
             # what this weave can do beyond the first version, for the phone to offer
             # a touchpad of its own for the phone's fingers, where the system gives one
@@ -1279,7 +1281,7 @@ class Daemon:
             # the tailnet lookup ends with the name, which the list has already
             addrs = list(dict.fromkeys(addrs))
             return {"ok": True, "code": code, "name": self.host, "port": self.cfg["port"], "addrs": addrs,
-                    "link": pairing.invite(self.host, addrs, self.cfg["port"], code), "ttl": self.codes.ttl,
+                    "link": pairing.invite(self.host, addrs, self.cfg["port"], code, self.dashboard.id), "ttl": self.codes.ttl,
                     "lan": bool(self.cfg["allow_lan"])}
         if cmd == "pair_status":
             code = str(req.get("code", ""))

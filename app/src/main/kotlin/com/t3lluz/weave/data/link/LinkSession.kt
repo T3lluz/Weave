@@ -453,6 +453,8 @@ class LinkSession @Inject constructor(
                     val mac = w.optString("mac")
                     if (mac.isNotBlank()) prefs.update { it.copy(wakeMac = mac, wakeBroadcast = w.optString("brd").takeIf { b -> b != "null" }.orEmpty()) }
                 }
+                // its own id, for knowing it again when a code for it is scanned
+                m.optString("id").take(64).let { id -> if (id.isNotBlank()) prefs.update { it.copy(ident = id) } }
                 // let in: this computer is one of the phone's own from now on, listed without a dashboard
                 prefs.remember(prefs.config.value)
                 ping()

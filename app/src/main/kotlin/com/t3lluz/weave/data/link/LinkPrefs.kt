@@ -55,6 +55,8 @@ data class LinkConfig(
      * in the dashboard's list never does.
      */
     val board: String = "",
+    /** The picked computer's own id, from its welcome: how a code scanned later is known to be for it. */
+    val ident: String = "",
 )
 
 /**
@@ -105,13 +107,18 @@ class LinkPrefs @Inject constructor(
 
     /**
      * The computer just connected to goes to the top of [known]. It takes the place of its own
-     * older entry (the same key: its addresses may have changed since) and of any other entry at
-     * exactly the same addresses (the same computer, paired again).
+     * older entry (the same key: its addresses may have changed since), of any other entry at
+     * exactly the same addresses, and of any with the same id of its own (the same computer,
+     * paired again: one machine is one entry).
      */
     fun remember(cfg: LinkConfig) {
         if (cfg.host.isBlank() || cfg.key.isBlank()) return
-        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast, cfg.key, cfg.board)
-        val next = (listOf(entry) + _known.value.filterNot { it.key == entry.key || (it.host == entry.host && it.port == entry.port) }).take(KNOWN_MAX)
+        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast, cfg.key, cfg.board, cfg.ident)
+        val next = (
+            listOf(entry) + _known.value.filterNot {
+                it.key == entry.key || (it.host == entry.host && it.port == entry.port) || (entry.ident.isNotBlank() && it.ident == entry.ident)
+            }
+            ).take(KNOWN_MAX)
         if (next == _known.value) return
         _known.value = next
         prefs.edit { putString(KEY_KNOWN, JSONArray(next.map { it.toJson() }).toString()) }
@@ -168,6 +175,7 @@ class LinkPrefs @Inject constructor(
             putBoolean("clipSync", next.clipSync)
             putString("key", next.key)
             putString("board", next.board)
+            putString("ident", next.ident)
         }
     }
 
@@ -192,6 +200,7 @@ class LinkPrefs @Inject constructor(
             wakeBroadcast = prefs.getString("wakeBroadcast", d.wakeBroadcast).orEmpty(),
             clipSync = prefs.getBoolean("clipSync", d.clipSync),
             board = prefs.getString("board", "").orEmpty(),
+            ident = prefs.getString("ident", "").orEmpty(),
             // a computer picked by a build before keys gets one now; it will ask once more
             key = prefs.getString("key", "").orEmpty().ifBlank {
                 if (prefs.getString("host", "").isNullOrBlank()) "" else newKey().also { made -> prefs.edit { putString("key", made) } }
@@ -214,9 +223,11 @@ data class KnownComputer(
     val key: String = "",
     /** The dashboard's id for it, when it was picked from the dashboard's list ([LinkConfig.board]). */
     val board: String = "",
+    /** Its own id, from its welcome ([LinkConfig.ident]); blank for one that never said. */
+    val ident: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject().put("name", name).put("host", host).put("port", port).put("ticket", ticket)
-        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast).put("key", key).put("board", board)
+        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast).put("key", key).put("board", board).put("ident", ident)
 
     companion object {
         /**
@@ -228,7 +239,7 @@ data class KnownComputer(
             if (host.isBlank()) return null
             return KnownComputer(o.optString("name").ifBlank { host.substringBefore(',') }, host, o.optInt("port", LinkProtocol.PORT),
                 o.optString("ticket"), o.optString("wakeMac"), o.optString("wakeBroadcast"), o.optString("key").ifBlank { newKey() },
-                o.optString("board"))
+                o.optString("board"), o.optString("ident"))
         }
     }
 }
