@@ -78,6 +78,8 @@ def monitor_list(mons: list[dict]) -> list[dict]:
 
 # how often the laptop's clipboard is looked at while the phone keeps the two in step
 CLIP_EVERY = 1.0
+# how many phones' last clipboard is kept between their visits
+CLIP_PHONES = 8
 
 # how long Hyprland may take to apply a move from weave's mouse before the pointer counts it
 MOVE_SETTLE = 0.003
@@ -576,9 +578,15 @@ class Session:
 
     async def _sync_clipboard(self):
         """Sends the laptop's clipboard to the phone each time it changes, while the phone keeps them in step."""
-        # what is there now stays: only what is copied from here on goes over
+        # A phone that was here before gets what was copied while it was away: the last text it
+        # and the laptop both had is kept between its visits (in memory only). The first wait
+        # gives the phone time to send what it copied meanwhile, which then wins. A phone seen
+        # for the first time gets only what is copied from here on.
+        seen = getattr(self.daemon, "clip_seen", None)
+        if self.clip_last is None and seen is not None:
+            self.clip_last = seen.get(self.key)
         if self.clip_last is None:
-            self.clip_last = await shell.clip_get(timeout=2)
+            self._clip_is(await shell.clip_get(timeout=2))
         while not self.closed:
             await asyncio.sleep(CLIP_EVERY)
             try:
@@ -589,8 +597,18 @@ class Session:
                 continue
             # an image, or nothing at all, isn't text to send
             if text and text != self.clip_last:
-                self.clip_last = text
+                self._clip_is(text)
                 self.send_json({"t": "clip", "text": text[:200_000], "sync": True})
+
+    def _clip_is(self, text: str):
+        """The text both clipboards have now, kept for this phone's next visit too."""
+        self.clip_last = text
+        seen = getattr(self.daemon, "clip_seen", None)
+        if seen is not None and self.key:
+            seen.pop(self.key, None)
+            seen[self.key] = text
+            while len(seen) > CLIP_PHONES:
+                seen.pop(next(iter(seen)))
 
     async def _warp(self, x: float, y: float):
         """Puts the pointer at a point of the desk, kept inside the monitor nearest to it."""
@@ -778,8 +796,8 @@ class Session:
             if msg.get("net"):
                 self.net = str(msg["net"])[:12]
         elif t == "clip_set":
-            text = str(msg.get("text", ""))
-            self.clip_last = text
+            text = str(msg.get("text", ""))[:200_000]
+            self._clip_is(text)
             await shell.clip_set(text)
             # a copy kept in step by the phone says nothing; one sent on purpose says it landed
             if not msg.get("quiet"):
@@ -889,6 +907,8 @@ class Daemon:
         # phone that draws its own, and what cursor:no_hardware_cursors was before
         self.cursor_apart = False
         self.codes = pairing.Codes()
+        # per phone (by its key), the last text its clipboard and the laptop's both had
+        self.clip_seen: dict[str, str] = {}
         self.cursor_was: int | None = None
         self.cursor_lock = asyncio.Lock()
         self.connections: set[Session] = set()   # every phone on the line, let in or not

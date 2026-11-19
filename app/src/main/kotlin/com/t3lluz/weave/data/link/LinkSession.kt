@@ -627,6 +627,11 @@ class LinkSession @Inject constructor(
     /** The last text either clipboard had while the two are kept in step: the one not to send again. */
     @Volatile var clipSynced: String? = null
 
+    /** When the phone's clip last looked at was made; see [LinkPrefs.clipSeen]. */
+    var clipSeen: Long
+        get() = prefs.clipSeen
+        set(value) { prefs.clipSeen = value }
+
     /** Whether the two clipboards are kept in step: asked for, and this tandem can. */
     val syncsClipboard: Boolean get() = prefs.config.value.clipSync && CLIP_SYNC in _state.value.caps
 

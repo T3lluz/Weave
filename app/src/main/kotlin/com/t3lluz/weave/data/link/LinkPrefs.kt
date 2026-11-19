@@ -123,6 +123,15 @@ class LinkPrefs @Inject constructor(
         (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(KnownComputer::fromJson) }
     }.getOrDefault(emptyList())
 
+    /**
+     * When the clip last looked at was made ([android.content.ClipDescription.getTimestamp]): a
+     * clip made at another time is new, whichever app it was copied in and however long ago
+     * Weave was last open. -1 before any was looked at.
+     */
+    var clipSeen: Long
+        get() = prefs.getLong("clipSeen", -1L)
+        set(value) = prefs.edit { putLong("clipSeen", value) }
+
     fun update(change: (LinkConfig) -> LinkConfig) {
         val next = change(_config.value)
         if (next == _config.value) return

@@ -64,6 +64,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -201,30 +202,31 @@ fun LinkScreen(
         }
     }
     // Copied on the phone, there to paste on the laptop, while the two are kept in step. Android lets only
-    // the app in front read the clipboard: this listens while the remote is up, and looks again each time
-    // it comes back (copied in another app). The time a clip was made is read first, so the clipboard
-    // itself (and Android's "pasted from" note) is only read when there is something new.
+    // the app whose window has the focus read the clipboard, and things are mostly copied in another app:
+    // so this looks each time Weave's window gets the focus back, and listens while it has it. The time a
+    // clip was made is read first and remembered (LinkPrefs.clipSeen), so the clipboard itself (and
+    // Android's "pasted from" note) is only read when there is a clip Weave hasn't looked at yet.
     val syncing = online && config.clipSync && LinkSession.CLIP_SYNC in state.caps
-    val resumedNow = rememberIsResumed()
-    DisposableEffect(syncing, resumedNow) {
-        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        var stamp = -1L
-        fun look() {
-            val desc = cm.primaryClipDescription ?: return
-            if (desc.timestamp == stamp) return
-            stamp = desc.timestamp
-            if (!desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_PLAIN) && !desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_HTML)) return
-            val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
-            if (text.isNotEmpty() && text != session.clipSynced) session.copyToLaptop(text, quiet = true)
+    val inFront = rememberIsResumed() && LocalWindowInfo.current.isWindowFocused
+    val clips = remember { context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager }
+    /** Sends the phone's clip to the laptop when it is one not looked at before; whether it did. */
+    fun sendNewClip(): Boolean {
+        val desc = clips.primaryClipDescription ?: return false
+        if (desc.timestamp == session.clipSeen) return false
+        session.clipSeen = desc.timestamp
+        if (!desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_PLAIN) && !desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_HTML)) return false
+        val text = clips.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        if (text.isEmpty() || text == session.clipSynced) return false
+        session.copyToLaptop(text, quiet = true)
+        return true
+    }
+    DisposableEffect(syncing, inFront) {
+        val listener = android.content.ClipboardManager.OnPrimaryClipChangedListener { sendNewClip() }
+        if (syncing && inFront) {
+            sendNewClip()
+            clips.addPrimaryClipChangedListener(listener)
         }
-        val listener = android.content.ClipboardManager.OnPrimaryClipChangedListener { look() }
-        if (syncing && resumedNow) {
-            // what is there when it starts stays put: only what is copied from here on goes over
-            stamp = cm.primaryClipDescription?.timestamp ?: -1L
-            if (session.clipSynced == null) session.clipSynced = ""
-            cm.addPrimaryClipChangedListener(listener)
-        }
-        onDispose { cm.removePrimaryClipChangedListener(listener) }
+        onDispose { clips.removePrimaryClipChangedListener(listener) }
     }
 
     // Looking for laptops while there is none to show; once connected, one look keeps the saved ticket current.
@@ -272,8 +274,9 @@ fun LinkScreen(
                     }
                 }
                 // copied on the laptop while the two are kept in step: here too, without a word
+                // (a clip made here that hasn't gone over yet is the newer one: it goes, and this is dropped)
                 is LinkEvent.Clipboard -> if (event.sync) {
-                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
+                    if (!sendNewClip()) clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
                 } else if (event.text.isEmpty()) {
                     toast = "Nothing is copied on $laptopName"
                 } else {
@@ -342,6 +345,8 @@ fun LinkScreen(
             },
             fetchClipboard = { session.askClipboard() },
             clipSync = { on ->
+                // what is on the phone's clipboard when it is turned on stays put: only what is copied from here on goes over
+                if (on) clips.primaryClipDescription?.let { session.clipSeen = it.timestamp }
                 session.setClipSync(on)
                 toast = if (on) "What you copy here or on $laptopName is there on both" else "The clipboards go their own way again"
             },
