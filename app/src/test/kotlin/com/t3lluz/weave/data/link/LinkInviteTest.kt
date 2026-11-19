@@ -10,8 +10,8 @@ class LinkInviteTest {
     @Test
     fun theLinkBehindTheCodeGivesEveryAddressInOrder() {
         // what `weave pair` prints, as pairing.py builds it
-        val invite = parseInvite("https://t3lluz.com/weave/pair#n=my+box&a=192.168.1.23%2C100.74.84.100%2Cbox&p=47600&c=kq3T-xYz_9aBcDeF")
-        assertEquals(LinkInvite("my box", listOf("192.168.1.23", "100.74.84.100", "box"), 47600, "kq3T-xYz_9aBcDeF"), invite)
+        val invite = parseInvite("https://t3lluz.com/weave/pair#n=my+box&a=192.168.1.23%2C100.64.0.10%2Cbox&p=47600&c=kq3T-xYz_9aBcDeF")
+        assertEquals(LinkInvite("my box", listOf("192.168.1.23", "100.64.0.10", "box"), 47600, "kq3T-xYz_9aBcDeF"), invite)
     }
 
     @Test
@@ -43,14 +43,14 @@ class LinkInviteTest {
         assertTrue(isLocalNetwork("192.168.1.23"))
         assertTrue(isLocalNetwork("10.0.0.2"))
         assertTrue(isLocalNetwork("172.20.3.4"))
-        assertFalse(isLocalNetwork("100.74.84.100"))
+        assertFalse(isLocalNetwork("100.64.0.10"))
         assertFalse(isLocalNetwork("172.32.0.1"))
         assertFalse(isLocalNetwork("t3lluz"))
     }
 
     @Test
     fun anAnswerFromTheNetworkIsTiedToAKnownComputerOnlyByItsAddress() {
-        val mine = listOf(LinkHost("known", "t3lluz", listOf("192.168.1.23", "100.74.84.100", "t3lluz"), 47600, "ticket", online = false, busy = false))
+        val mine = listOf(LinkHost("known", "t3lluz", listOf("192.168.1.23", "100.64.0.10", "t3lluz"), 47600, "ticket", online = false, busy = false))
         val found = listOf(
             // the computer itself, answering from its own address
             LinkHost("lan:192.168.1.23", "t3lluz", listOf("192.168.1.23"), 47600, "", online = true, busy = true),
@@ -59,7 +59,7 @@ class LinkInviteTest {
         )
         val merged = mergeFound(mine, found)
         assertEquals(2, merged.size)
-        assertEquals("its addresses are untouched", listOf("192.168.1.23", "100.74.84.100", "t3lluz"), merged[0].addresses)
+        assertEquals("its addresses are untouched", listOf("192.168.1.23", "100.64.0.10", "t3lluz"), merged[0].addresses)
         assertEquals("ticket", merged[0].ticket)
         assertTrue(merged[0].online && merged[0].busy)
         assertEquals("the stranger is an entry of its own", listOf("192.168.1.66"), merged[1].addresses)
@@ -87,26 +87,26 @@ class LinkInviteTest {
     @Test
     fun aComputerPickedFromTheDashboardIsOneEntryWithItsKey() {
         val known = listOf(
-            LinkHost("known:k1", "t3lluz", listOf("100.74.84.100", "t3lluz"), 47600, "old-code", online = false, busy = false, key = "k1", board = "d1"),
+            LinkHost("known:k1", "t3lluz", listOf("100.64.0.10", "t3lluz"), 47600, "old-code", online = false, busy = false, key = "k1", board = "d1"),
             LinkHost("known:k2", "desk", listOf("192.168.1.40"), 47600, "", online = true, busy = false, key = "k2"),
         )
         // the dashboard's own entry for the first, which has moved since
-        val board = listOf(LinkHost("d1", "t3lluz", listOf("100.74.84.200", "t3lluz"), 47600, "ticket", online = true, busy = false, fromDashboard = true))
+        val board = listOf(LinkHost("d1", "t3lluz", listOf("100.64.0.20", "t3lluz"), 47600, "ticket", online = true, busy = false, fromDashboard = true))
         val (left, joined) = joinKnown(known, board)
         assertEquals(listOf("desk"), left.map { it.name })
         assertEquals("the dashboard's addresses and ticket, the phone's key", "k1", joined[0].key)
-        assertEquals(listOf("100.74.84.200", "t3lluz"), joined[0].addresses)
+        assertEquals(listOf("100.64.0.20", "t3lluz"), joined[0].addresses)
         assertEquals("ticket", joined[0].ticket)
     }
 
     @Test
     fun anEntryThatOnlyLooksLikeAKnownComputerNeverGetsItsKey() {
         val known = listOf(
-            LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "100.74.84.100"), 47600, "", online = true, busy = false, key = "k1", board = "d1"),
+            LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "100.64.0.10"), 47600, "", online = true, busy = false, key = "k1", board = "d1"),
             LinkHost("known:k2", "desk", listOf("192.168.1.40"), 47600, "", online = true, busy = false, key = "k2"),
         )
         // the same name under another id, with somebody's address put in front of a real one
-        val namesake = LinkHost("d9", "t3lluz", listOf("203.0.113.9", "100.74.84.100"), 47600, "", online = true, busy = false, fromDashboard = true)
+        val namesake = LinkHost("d9", "t3lluz", listOf("203.0.113.9", "100.64.0.10"), 47600, "", online = true, busy = false, fromDashboard = true)
         // one that shares only a home-network address with a computer paired by code: those repeat from house to house
         val lookalike = LinkHost("d8", "desk", listOf("203.0.113.9", "192.168.1.40"), 47600, "", online = true, busy = false, fromDashboard = true)
         // and one this phone has nothing to do with
@@ -119,7 +119,7 @@ class LinkInviteTest {
 
     @Test
     fun aComputerSavedBeforeKeysStaysOnTheListWithANewOne() {
-        val old = org.json.JSONObject().put("name", "t3lluz").put("host", "100.74.84.100").put("port", 47600).put("wakeMac", "aa:bb:cc:dd:ee:ff")
+        val old = org.json.JSONObject().put("name", "t3lluz").put("host", "100.64.0.10").put("port", 47600).put("wakeMac", "aa:bb:cc:dd:ee:ff")
         val read = KnownComputer.fromJson(old) { "made-now" }!!
         assertEquals("made-now", read.key)
         assertEquals("aa:bb:cc:dd:ee:ff", read.wakeMac)
@@ -133,7 +133,7 @@ class LinkInviteTest {
     fun theRowThatIsTheSavedComputerIsFoundByAddressNotByName() {
         val real = LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "t3lluz"), 47600, "", online = true, busy = false, key = "k1")
         val stranger = LinkHost("lan:192.168.1.66", "t3lluz", listOf("192.168.1.66"), 47600, "", online = true, busy = false)
-        val saved = "192.168.1.23, 100.74.84.100,t3lluz"
+        val saved = "192.168.1.23, 100.64.0.10,t3lluz"
         assertTrue(isSaved(real, saved, 47600))
         assertFalse("the same name from another address is somebody else", isSaved(stranger, saved, 47600))
         assertFalse(isSaved(real, saved, 5000))
