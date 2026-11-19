@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -64,6 +65,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -139,6 +141,10 @@ fun LinkScreen(
     // a link that dropped stays on the remote while it comes back
     val online = state.status == LinkStatus.Online || state.status == LinkStatus.Reconnecting
     val imeVisible = WindowInsets.isImeVisible
+    // Where the keyboard is heading, known the moment it starts to move. The screen rearranges by
+    // this, in step with the keyboard: by whether it is still showing, the mouse buttons and the
+    // shortcuts would only come back once it had gone all the way down.
+    val imeHeadingUp = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current) > 0
     val laptopName = state.laptop.ifBlank { config.name.ifBlank { config.host.substringBefore(',') } }
     // the laptop's picture is what the glass over it blurs
     val hazeState = rememberHazeState()
@@ -353,7 +359,7 @@ fun LinkScreen(
 
     fun toggleKeyboard() {
         raisedForField = false
-        if (imeVisible) keyView?.hideKeyboard() else keyView?.showKeyboard()
+        if (imeHeadingUp) keyView?.hideKeyboard() else keyView?.showKeyboard()
     }
 
     // Each switch says what it did: the two sounds are easy to mix up.
@@ -410,12 +416,12 @@ fun LinkScreen(
                 )
                 landscape -> Sideways(
                     viewModel = viewModel, state = state, config = config, geometry = geometry, hazeState = hazeState,
-                    imeVisible = imeVisible, mods = mods, onMods = { mods = it }, onKey = ::pressed,
+                    imeVisible = imeHeadingUp, mods = mods, onMods = { mods = it }, onKey = ::pressed,
                     actions = actions, onKeyboard = ::toggleKeyboard, onUpright = { viewModel.orientation = 2 },
                 )
                 else -> Upright(
                     viewModel = viewModel, state = state, config = config, geometry = geometry, hazeState = hazeState,
-                    laptopName = laptopName, imeVisible = imeVisible, mods = mods, onMods = { mods = it }, onKey = ::pressed,
+                    laptopName = laptopName, imeVisible = imeHeadingUp, mods = mods, onMods = { mods = it }, onKey = ::pressed,
                     actions = actions, onKeyboard = ::toggleKeyboard, onMore = { sheet = true },
                     onSideways = { viewModel.orientation = 1 }, onNavigateBack = viewModel::disconnect,
                     arranging = arranging, onArranging = { arranging = it },

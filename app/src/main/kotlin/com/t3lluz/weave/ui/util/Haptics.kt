@@ -136,13 +136,15 @@ data class Step(val strength: Float, val sharp: Float)
 data class Stretch(val steps: List<Step>, val stepMs: Int)
 
 /**
- * What a finger sliding over paper feels: not ticks but one unbroken, faint hiss whose pitch
- * and strength wander all the time, there while the finger moves and gone when it stops.
+ * What a finger sliding over paper feels: not ticks but one unbroken, faint hiss, there while
+ * the finger moves and gone when it stops.
  *
  * It is played as one long stretch that is simply cut off when the finger rests ([restMs]
- * after its last move) or lifts. A new stretch is only started when the old one is about to
- * run out, or when the finger has changed its pace enough to be felt: a faster stroke is
- * stronger, as paper is louder under a faster hand.
+ * after its last move) or lifts, and started again only when it is about to run out. Nothing
+ * else starts it over: every new start is a small hitch in the motor, and a hitch several
+ * times a second is a wobble, not paper. Within the stretch the strength and the pitch drift a
+ * little from one moment to the next, each a short step from the last (never a jump), which is
+ * what keeps it from being a flat hum.
  *
  * [chance] gives numbers from 0 to 1 and [now] the time in ms; both are handed in so this can
  * be tested without a phone.
@@ -153,70 +155,56 @@ class Grain(
     private val now: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
     private var travelled = 0f
-    private var speed = 0f          // dp a millisecond, smoothed
-    private var lastAt = 0L
     private var playing = false
-    private var startedAt = 0L
     private var endsAt = 0L
-    private var pace = 0
 
     /** How long after the finger's last move the grain is cut off. */
     val restMs: Long get() = REST_MS
 
-    /** The finger went [dp] further: a stretch to start playing now (in place of what plays), or null to let it be. */
+    /** The finger went [dp] further: a stretch to start playing now, or null to let what plays be. */
     fun glide(dp: Float): Stretch? {
         if (dp <= 0f) return null
         val at = now()
-        val since = (at - lastAt).coerceIn(1, 60)
-        lastAt = at
-        speed = speed * 0.7f + dp / since * 0.3f
         travelled += dp
-        val was = pace
-        // slow, steady or fast, with some give so it doesn't flip at the border
-        val to = when {
-            speed > FAST * (if (was == 2) 0.8f else 1.2f) -> 2
-            speed > STEADY * (if (was >= 1) 0.8f else 1.2f) -> 1
-            else -> 0
-        }
         if (playing) {
-            val running = at - startedAt
-            val renew = at >= endsAt - 2 * stepMs || (to != was && running >= PACE_HOLDS_MS)
-            if (!renew) return null
+            if (at < endsAt - 2 * stepMs) return null
         } else if (travelled < MOVED_DP) {
             return null   // a resting finger's tremble is not a stroke
         }
         travelled = 0f
-        pace = to
         playing = true
-        startedAt = at
         endsAt = at + STEPS * stepMs.toLong()
-        val strong = STRENGTH[to]
-        return Stretch(List(STEPS) { Step(strong * (0.55f + 0.45f * chance()), SHARP_FROM + (1f - SHARP_FROM) * chance()) }, stepMs)
+        var strength = STRENGTH
+        var sharp = (SHARP_FROM + 1f) / 2f
+        val steps = List(STEPS) {
+            // a short step from where it was, kept inside its band
+            strength = (strength + (chance() - 0.5f) * 2f * STRENGTH * DRIFT).coerceIn(STRENGTH * (1f - WANDER), STRENGTH * (1f + WANDER))
+            sharp = (sharp + (chance() - 0.5f) * 2f * (1f - SHARP_FROM) * DRIFT).coerceIn(SHARP_FROM, 1f)
+            Step(strength, sharp)
+        }
+        return Stretch(steps, stepMs)
     }
 
     /** The grain was cut off (the finger rested or lifted): the next move starts it again. */
     fun rested() {
         playing = false
         travelled = 0f
-        speed = 0f
-        pace = 0
     }
 
     companion object {
-        /** Steps in a stretch: two seconds' worth, cut off long before by a finger that stops. */
-        const val STEPS = 100
-        const val REST_MS = 55L
+        /** Steps in a stretch: five seconds' worth, cut off long before by a finger that stops. */
+        const val STEPS = 250
+        /** A slow finger's moves can be this far apart without the grain breaking off between them. */
+        const val REST_MS = 90L
         /** How far the finger has to go before the grain starts. */
-        const val MOVED_DP = 0.5f
-        /** Where steady and fast begin, in dp a millisecond. */
-        const val STEADY = 0.22f
-        const val FAST = 0.8f
-        /** How long a stretch plays at least before a change of pace starts another. */
-        const val PACE_HOLDS_MS = 140L
-        /** How strong the grain is under a slow, a steady and a fast finger. */
-        val STRENGTH = floatArrayOf(0.14f, 0.2f, 0.28f)
-        /** The hiss stays high: from here up to as sharp as the motor goes. */
-        const val SHARP_FROM = 0.55f
+        const val MOVED_DP = 0.6f
+        /** How strong the grain is: just past what a still hand notices. */
+        const val STRENGTH = 0.085f
+        /** How far the strength may drift from that, either way, and how much of its band each moment may cross. */
+        const val WANDER = 0.22f
+        const val DRIFT = 0.3f
+        /** The hiss stays high and thin: from here up to as sharp as the motor goes. */
+        const val SHARP_FROM = 0.78f
     }
 }
 

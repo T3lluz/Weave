@@ -5,21 +5,23 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 class GrainTest {
     private var clock = 1_000L
     private fun grain(chance: () -> Float = { 0.5f }) = Grain(stepMs = 20, chance = chance, now = { clock })
 
     @Test
-    fun aSteadyStrokeIsOneUnbrokenStretchNotAStringOfThem() {
+    fun aStrokeIsOneUnbrokenStretchWhateverItsPace() {
         val g = grain()
         var starts = 0
-        // a finger at 0.5 dp a millisecond, told of every 8 ms, for a second and a half
-        repeat(187) {
+        // slow, then fast, then slow again, told of every 8 ms, for three seconds
+        repeat(375) { step ->
             clock += 8
-            if (g.glide(4f) != null) starts++
+            val dp = when (step / 60 % 3) { 0 -> 0.8f; 1 -> 14f; else -> 3f }
+            if (g.glide(dp) != null) starts++
         }
-        assertTrue("it starts, settles to its pace, and is left to play: $starts", starts in 1..2)
+        assertEquals("started once and left to play: every restart is a hitch", 1, starts)
     }
 
     @Test
@@ -27,10 +29,10 @@ class GrainTest {
         val g = grain()
         var startedAt = 0L
         var renewedAfter = 0L
-        repeat(400) {
+        repeat(900) {
             clock += 8
             if (g.glide(4f) != null) {
-                if (startedAt != 0L && renewedAfter == 0L && clock - startedAt > 1_000) renewedAfter = clock - startedAt
+                if (startedAt != 0L && renewedAfter == 0L) renewedAfter = clock - startedAt
                 startedAt = clock
             }
         }
@@ -54,33 +56,16 @@ class GrainTest {
     }
 
     @Test
-    fun aFasterStrokeIsStrongerAndStartsOverOnlyOnceItHasPlayedAWhile() {
-        val g = grain()
-        clock += 8
-        val slow = g.glide(0.8f)!!.steps.maxOf { it.strength }
-        var fast = 0f
-        var changes = 0
-        repeat(60) {
-            clock += 8
-            g.glide(14f)?.let { stretch ->
-                fast = stretch.steps.maxOf { it.strength }
-                changes++
-            }
-        }
-        assertTrue("$slow < $fast", slow < fast)
-        assertEquals("once to the faster pace, not at every step on the way there", 1, changes)
-        assertTrue(fast <= Grain.STRENGTH.last())
-    }
-
-    @Test
-    fun theGrainWandersAndStaysHigh() {
+    fun theGrainDriftsInShortStepsAndStaysFaintAndHigh() {
         var roll = 0f
         val g = grain { roll.also { roll = (roll + 0.37f) % 1f } }
         clock += 8
-        val stretch = g.glide(3f)!!
-        assertEquals(Grain.STEPS, stretch.steps.size)
-        assertTrue(stretch.steps.map { it.strength }.toSet().size > 2)
-        assertTrue(stretch.steps.all { it.sharp >= Grain.SHARP_FROM && it.sharp <= 1f })
-        assertTrue(stretch.steps.all { it.strength > 0f })
+        val steps = g.glide(3f)!!.steps
+        assertEquals(Grain.STEPS, steps.size)
+        assertTrue("it does drift", steps.map { it.strength }.toSet().size > 5)
+        assertTrue(steps.all { it.strength in Grain.STRENGTH * 0.77f..Grain.STRENGTH * 1.23f })
+        assertTrue(steps.all { it.sharp in Grain.SHARP_FROM..1f })
+        val biggest = steps.zipWithNext { a, b -> abs(a.strength - b.strength) }.max()
+        assertTrue("never a jump: $biggest", biggest <= Grain.STRENGTH * Grain.DRIFT + 1e-5f)
     }
 }

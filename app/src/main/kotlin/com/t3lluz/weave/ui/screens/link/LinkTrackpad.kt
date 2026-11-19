@@ -11,6 +11,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.Canvas
@@ -314,7 +316,9 @@ internal fun LinkTrackpad(
         SweepMark(swept == false, back = false, reduced, Modifier.align(Alignment.CenterEnd))
         AnimatedVisibility(
             visible = buttons,
-            enter = fadeIn(AppMotion.fadeTween()), exit = fadeOut(AppMotion.fadeTween()),
+            // they rise into place as the keyboard leaves, and sink away as it comes
+            enter = fadeIn(tween(160)) + slideInVertically(spring(dampingRatio = 0.82f, stiffness = 520f)) { it / 2 },
+            exit = fadeOut(tween(90)) + slideOutVertically(tween(140)) { it / 2 },
             // 8 dp in from the pad's sides and foot, their outer corners the pad's (28) less that
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp, start = 8.dp, end = 8.dp),
         ) {
