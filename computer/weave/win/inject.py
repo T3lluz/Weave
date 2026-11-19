@@ -50,6 +50,16 @@ TYPING_PACE = 0.006
 PACKET_PACE = 0.012
 # Shift goes down this long before its key, and stays this long after the last one it is for
 MOD_LEAD, MOD_HOLD = 0.004, 0.02
+# How long a key sent straight after text waits, past the program having caught up: after a
+# letter or two (someone typing on the phone), and after a stretch of text sent in one go (a
+# shortcut's "type this, then Enter"). And how long typing waits after an Enter. The new Notepad
+# turns an address typed this fast into a link a moment after its last letter, and reworks the
+# line again on Enter: an Enter sent inside that moment lands three letters early ("example.",
+# Enter, "com"), and a letter sent right behind an Enter is lost. Measured there: 120 ms after
+# the text is too short, 400 ms is enough; plain words are right with no wait at all.
+KEY_AFTER_TEXT, KEY_AFTER_BURST = 0.03, 0.4
+BURST = 3
+AFTER_ENTER = 0.08
 # how long a program gets to answer before it is typed at regardless
 CATCH_UP_MS = 150
 
@@ -108,6 +118,7 @@ class Injector:
         self._presses: dict[str, int] = {}
         self._queue: asyncio.Queue = asyncio.Queue()
         self._typing = False          # a key or a text is on its way out right now
+        self._closing = False
         self.pace = float(os.environ.get("WEAVE_TYPING_PACE", TYPING_PACE))
         self.packet_pace = PACKET_PACE
         self._typist = asyncio.get_running_loop().create_task(self._type())
@@ -128,6 +139,10 @@ class Injector:
     @staticmethod
     def _key(vk: int, up: bool, extended: bool = False, scan: int = 0, unicode: bool = False):
         flags = (api.KEYEVENTF_KEYUP if up else 0) | (api.KEYEVENTF_EXTENDEDKEY if extended else 0) | (api.KEYEVENTF_UNICODE if unicode else 0)
+        if not unicode and not scan:
+            # the key's place on the keyboard too, as a real one sends it: programs that read
+            # keys below the virtual-key level (the new Notepad's text box) go wrong without
+            scan = api.user32.MapVirtualKeyW(vk, 0) if api.user32 else 0
         i = api.INPUT(type=api.INPUT_KEYBOARD)
         i.ki = api.KEYBDINPUT(vk, scan, flags, 0, 0)
         return i
@@ -195,14 +210,26 @@ class Injector:
             self._queue.put_nowait(("text", value))
 
     async def _type(self):
+        after_text = 0   # how many characters the text just before this job had
         while True:
             job = await self._queue.get()
             try:
                 self._typing = True
                 if job[0] == "key":
+                    if after_text:
+                        # A key straight after text (a shortcut's "type this, then Enter") must
+                        # find the text in: the new Notepad takes its letters in a moment after
+                        # their keys, and an Enter sent at once lands three letters early.
+                        await asyncio.to_thread(self._caught_up)
+                        await asyncio.sleep(KEY_AFTER_BURST if after_text >= BURST else KEY_AFTER_TEXT)
+                    after_text = 0
                     self._key_now(*job[1:])
+                    if job[1] == "enter" and job[3] is None:
+                        await asyncio.to_thread(self._caught_up)
+                        await asyncio.sleep(AFTER_ENTER)
                 else:
                     await self._text_now(job[1])
+                    after_text = len(job[1])
             except Exception as err:   # one bad key must not end the typing
                 print(f"weave: typing: {err!r}")
             finally:
@@ -268,11 +295,14 @@ class Injector:
                 await asyncio.sleep(MOD_LEAD)
 
         try:
-            for ch in value:
+            for at, ch in enumerate(value):
                 if ch == "\n":
                     await hold([])
+                    await asyncio.to_thread(self._caught_up)
+                    await asyncio.sleep(KEY_AFTER_BURST if at >= BURST else KEY_AFTER_TEXT)
                     self._send(self._key(0x0D, False), self._key(0x0D, True))
-                    await asyncio.sleep(self.pace)
+                    await asyncio.to_thread(self._caught_up)
+                    await asyncio.sleep(AFTER_ENTER)
                     continue
                 stroke = None
                 if len(ch.encode("utf-16-le")) == 2:
@@ -304,17 +334,20 @@ class Injector:
             if held:
                 self._send(*[self._key(m, True) for m in reversed(held)])
 
-    def release_all(self):
+    def release_all(self, finish: bool = False):
         """Lets go of whatever a dropped connection left held, and stops its typing where it is:
         what waited to be typed is dropped, and the text being typed right now is cut off (it
         lets go of its own Shift on the way out). The rest of a sentence must not come out
-        under the next phone's fingers."""
-        while not self._queue.empty():
-            self._queue.get_nowait()
-        if self._typing:
-            self._typist.cancel()
-            self._typing = False
-            self._typist = asyncio.get_running_loop().create_task(self._type())
+        under the next phone's fingers. With [finish], what was asked for is still typed to the
+        end: a shortcut run from the phone's home screen closes its line the moment its last
+        step is sent, long before a sentence is typed."""
+        if not finish:
+            while not self._queue.empty():
+                self._queue.get_nowait()
+            if self._typing and not self._closing:
+                self._typist.cancel()
+                self._typing = False
+                self._typist = asyncio.get_running_loop().create_task(self._type())
         for kind, name in list(self._held):
             if kind == "button":
                 self._send(self._mouse(BUTTONS[name][1], data=BUTTONS[name][2]))
@@ -325,5 +358,6 @@ class Injector:
         self._presses = {}
 
     def close(self):
+        self._closing = True
         self._typist.cancel()
         self.release_all()

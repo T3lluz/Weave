@@ -107,6 +107,8 @@ class Session:
         # the phone draws the pointer itself, ahead of the picture: the recorders leave it out
         self.quiet = False            # asked for no notice: may only run a shortcut's steps
         self.quiet_steps, self.quiet_since = 0, time.monotonic()
+        self.cut = False              # closed from this end for asking more than a quiet line may
+        self.wait_until = 0.0         # while it waits to be let in: when the question runs out
         self.local_cursor = False
         # the phone numbers its moves; each pointer report says the last one it already shows,
         # so the phone draws exactly the moves after it on top (recent ones, with when each landed)
@@ -595,8 +597,9 @@ class Session:
                 raise
             except Exception:
                 continue
-            # an image, or nothing at all, isn't text to send
-            if text and text != self.clip_last:
+            # an image, or nothing at all, isn't text to send; and what the phone sent reads back
+            # without its last line break here (wl-paste -n), which is not a new copy
+            if text and text.rstrip("\n") != (self.clip_last or "").rstrip("\n"):
                 self._clip_is(text)
                 self.send_json({"t": "clip", "text": text[:200_000], "sync": True})
 
@@ -742,6 +745,7 @@ class Session:
             # more than a shortcut is a session, and a session shows its notice.
             self.quiet_steps += t != "ping"
             if t not in QUIET_MAY or self.quiet_steps > QUIET_STEPS or time.monotonic() - self.quiet_since > QUIET_SECONDS:
+                self.cut = True
                 asyncio.create_task(self.close())
                 return
         if t == "m":
@@ -889,7 +893,12 @@ class Session:
             if sync:
                 await sync()
             if self.daemon.injector:
-                self.daemon.injector.release_all()
+                if self.quiet and not self.cut:
+                    # A shortcut run from the home screen closes its line as soon as its last
+                    # step is sent: the text it asked for is still typed to the end.
+                    self.daemon.injector.release_all(finish=True)
+                else:
+                    self.daemon.injector.release_all()
             self.daemon.log(f"{self.name} disconnected")
             print(f"weave: {self.name} left")
         try:
@@ -967,8 +976,10 @@ class Daemon:
             before = self.pending.get(key)
             if before:
                 # The same phone again while its first try still waits (it tried again, or changed
-                # network): the wait is handed to this line, with the question already up.
+                # network): the wait is handed to this line, with the question already up, for
+                # as long as that question has left.
                 answer = before[1]
+                session.wait_until = before[0].wait_until
             else:
                 # A stranger on the network must not be able to bury the owner in questions: one
                 # phone waiting per address, and a few in all. The rest are turned away at once.
@@ -979,13 +990,14 @@ class Daemon:
                     return False
                 answer = asyncio.get_running_loop().create_future()
                 self.log(f"{session.name} asked to pair")
-                asyncio.create_task(self._ask(key, session, answer, time.monotonic() + PENDING_WAIT))
+                session.wait_until = time.monotonic() + PENDING_WAIT
+                asyncio.create_task(self._ask(key, session, answer, session.wait_until))
             session.send_json({"t": "pending", "host": self.host})
             self.pending[key] = (session, answer)
             self.dashboard.poke()
             try:
                 # shielded: this line giving up must not take the answer away from the one after it
-                allowed = await asyncio.wait_for(asyncio.shield(answer), PENDING_WAIT)
+                allowed = await asyncio.wait_for(asyncio.shield(answer), max(0.0, session.wait_until - time.monotonic()))
             except asyncio.TimeoutError:
                 allowed = False
             if self.pending.get(key, (None,))[0] is not session:

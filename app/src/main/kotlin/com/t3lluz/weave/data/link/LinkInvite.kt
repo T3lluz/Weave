@@ -116,17 +116,29 @@ internal fun mergeFound(listed: List<LinkHost>, found: List<LinkHost>): List<Lin
 }
 
 /**
- * A computer this phone knows that the dashboard lists too is one entry: the dashboard's, which
- * has its newest addresses and its ticket, carrying the key the phone gave it (so it is not
- * asked about again). The dashboard is asked over HTTPS at an address the owner set, which is
- * why an address it lists may tie its entry to a known computer. Returns the known computers
- * left over, and the dashboard's list.
+ * A computer this phone knows that the dashboard lists too is one entry.
+ *
+ * One that was picked from the dashboard's list is the dashboard's entry with the same id: it
+ * has the computer's newest addresses and its ticket, and carries the key the phone gave it (so
+ * it is not asked about again). An id is the computer's own on the dashboard; another computer
+ * can't announce under it.
+ *
+ * Nothing else ties them. An entry that only shares a name or an address with a known computer
+ * could be anybody's (a list of addresses is whatever its sender wrote), and the phone's token
+ * for that computer must not go where such an entry points. So the known computer stays as the
+ * phone saved it, and that entry is left out rather than shown beside it as a second one.
+ *
+ * Returns the known computers left over, and what is shown of the dashboard's list.
  */
 internal fun joinKnown(known: List<LinkHost>, board: List<LinkHost>): Pair<List<LinkHost>, List<LinkHost>> {
     val taken = HashSet<String>()
-    val joined = board.map { d ->
-        val k = known.firstOrNull { k -> k.id !in taken && k.port == d.port && k.addresses.any { it in d.addresses } }
-        if (k == null) d else d.copy(key = k.key).also { taken += k.id }
+    val joined = board.mapNotNull { d ->
+        val k = known.firstOrNull { k -> k.id !in taken && k.board.isNotBlank() && k.board == d.id }
+        when {
+            k != null -> d.copy(key = k.key, board = k.board).also { taken += k.id }
+            known.any { o -> o.port == d.port && o.addresses.any { it in d.addresses } } -> null
+            else -> d
+        }
     }
     return known.filterNot { it.id in taken } to joined
 }

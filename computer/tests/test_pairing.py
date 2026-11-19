@@ -165,6 +165,20 @@ class LettingIn(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.hello(again, "a" * 32, "not-a-code"))
         self.assertEqual(line.kinds(), ["welcome"])
 
+    async def test_a_line_that_takes_over_a_wait_gets_only_what_is_left_of_it(self):
+        with mock.patch.object(server, "PENDING_WAIT", 0.2):
+            first, _ = self.phone()
+            one = asyncio.create_task(self.hello(first, "a" * 32))
+            await asyncio.sleep(0.12)
+            again, line = self.phone("192.168.1.77")
+            started = asyncio.get_running_loop().time()
+            self.assertFalse(await self.hello(again, "a" * 32))
+            took = asyncio.get_running_loop().time() - started
+            self.assertLess(took, 0.25, "the question's own time, not a fresh wait on top")
+            self.assertEqual(line.kinds(), ["pending", "denied"])
+            self.assertFalse(await one)
+            self.assertEqual(self.d.pending, {})
+
     async def test_a_ticket_that_is_not_plain_text_is_just_a_wrong_ticket(self):
         self.d.codes.new()
         s, line = self.phone()

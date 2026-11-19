@@ -85,21 +85,48 @@ class LinkInviteTest {
     }
 
     @Test
-    fun aKnownComputerTheDashboardListsIsOneEntryWithItsKey() {
+    fun aComputerPickedFromTheDashboardIsOneEntryWithItsKey() {
         val known = listOf(
-            LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "100.74.84.100", "t3lluz"), 47600, "old-code", online = false, busy = false, key = "k1"),
+            LinkHost("known:k1", "t3lluz", listOf("100.74.84.100", "t3lluz"), 47600, "old-code", online = false, busy = false, key = "k1", board = "d1"),
             LinkHost("known:k2", "desk", listOf("192.168.1.40"), 47600, "", online = true, busy = false, key = "k2"),
         )
-        // the dashboard knows the first by its tailnet address, with a newer one beside it
-        val board = listOf(LinkHost("d1", "t3lluz", listOf("100.74.84.100", "100.74.84.200", "t3lluz"), 47600, "ticket", online = true, busy = false, fromDashboard = true))
+        // the dashboard's own entry for the first, which has moved since
+        val board = listOf(LinkHost("d1", "t3lluz", listOf("100.74.84.200", "t3lluz"), 47600, "ticket", online = true, busy = false, fromDashboard = true))
         val (left, joined) = joinKnown(known, board)
         assertEquals(listOf("desk"), left.map { it.name })
         assertEquals("the dashboard's addresses and ticket, the phone's key", "k1", joined[0].key)
-        assertEquals(listOf("100.74.84.100", "100.74.84.200", "t3lluz"), joined[0].addresses)
+        assertEquals(listOf("100.74.84.200", "t3lluz"), joined[0].addresses)
         assertEquals("ticket", joined[0].ticket)
-        // one on another port, or with no address in common, is not that computer
-        val other = listOf(LinkHost("d2", "t3lluz", listOf("100.99.0.1"), 47600, "", online = true, busy = false, fromDashboard = true))
-        assertEquals("", joinKnown(known, other).second[0].key)
+    }
+
+    @Test
+    fun anEntryThatOnlyLooksLikeAKnownComputerNeverGetsItsKey() {
+        val known = listOf(
+            LinkHost("known:k1", "t3lluz", listOf("192.168.1.23", "100.74.84.100"), 47600, "", online = true, busy = false, key = "k1", board = "d1"),
+            LinkHost("known:k2", "desk", listOf("192.168.1.40"), 47600, "", online = true, busy = false, key = "k2"),
+        )
+        // the same name under another id, with somebody's address put in front of a real one
+        val namesake = LinkHost("d9", "t3lluz", listOf("203.0.113.9", "100.74.84.100"), 47600, "", online = true, busy = false, fromDashboard = true)
+        // one that shares an address with a computer paired by code
+        val lookalike = LinkHost("d8", "desk", listOf("203.0.113.9", "192.168.1.40"), 47600, "", online = true, busy = false, fromDashboard = true)
+        // and one this phone has nothing to do with
+        val stranger = LinkHost("d7", "t3lluz", listOf("100.99.0.1"), 47600, "", online = true, busy = false, fromDashboard = true)
+        val (left, shown) = joinKnown(known, listOf(namesake, lookalike, stranger))
+        assertEquals("both known computers stay as the phone saved them", listOf("known:k1", "known:k2"), left.map { it.id })
+        assertEquals("the two that share an address are left out, not shown as a second one", listOf("d7"), shown.map { it.id })
+        assertEquals("", shown[0].key)
+    }
+
+    @Test
+    fun aComputerSavedBeforeKeysStaysOnTheListWithANewOne() {
+        val old = org.json.JSONObject().put("name", "t3lluz").put("host", "100.74.84.100").put("port", 47600).put("wakeMac", "aa:bb:cc:dd:ee:ff")
+        val read = KnownComputer.fromJson(old) { "made-now" }!!
+        assertEquals("made-now", read.key)
+        assertEquals("aa:bb:cc:dd:ee:ff", read.wakeMac)
+        val kept = KnownComputer.fromJson(read.copy(board = "d1").toJson()) { "another" }!!
+        assertEquals("one that has a key keeps it", "made-now", kept.key)
+        assertEquals("d1", kept.board)
+        assertNull(KnownComputer.fromJson(org.json.JSONObject().put("name", "nowhere")) { "k" })
     }
 
     @Test

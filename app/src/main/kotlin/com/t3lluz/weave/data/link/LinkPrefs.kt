@@ -49,6 +49,12 @@ data class LinkConfig(
     val clipSync: Boolean = false,
     /** What the picked computer's token is made from ([LinkPrefs.tokenFor]): given once, when it is first picked. */
     val key: String = "",
+    /**
+     * The dashboard's own id for the picked computer, when it was picked from the dashboard's list.
+     * Only an entry with this id may change where the phone looks for it; a name or an address
+     * in the dashboard's list never does.
+     */
+    val board: String = "",
 )
 
 /**
@@ -104,7 +110,7 @@ class LinkPrefs @Inject constructor(
      */
     fun remember(cfg: LinkConfig) {
         if (cfg.host.isBlank() || cfg.key.isBlank()) return
-        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast, cfg.key)
+        val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast, cfg.key, cfg.board)
         val next = (listOf(entry) + _known.value.filterNot { it.key == entry.key || (it.host == entry.host && it.port == entry.port) }).take(KNOWN_MAX)
         if (next == _known.value) return
         _known.value = next
@@ -120,7 +126,12 @@ class LinkPrefs @Inject constructor(
 
     private fun readKnown(): List<KnownComputer> = runCatching {
         val a = JSONArray(prefs.getString(KEY_KNOWN, "[]"))
-        (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(KnownComputer::fromJson) }
+        val read = (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let { o -> KnownComputer.fromJson(o, ::newKey) } }
+        // one saved by a build before keys got one just now: written back, so it keeps it
+        if ((0 until a.length()).any { a.optJSONObject(it)?.optString("key").isNullOrBlank() }) {
+            prefs.edit { putString(KEY_KNOWN, JSONArray(read.map { it.toJson() }).toString()) }
+        }
+        read
     }.getOrDefault(emptyList())
 
     /**
@@ -156,6 +167,7 @@ class LinkPrefs @Inject constructor(
             putString("wakeBroadcast", next.wakeBroadcast)
             putBoolean("clipSync", next.clipSync)
             putString("key", next.key)
+            putString("board", next.board)
         }
     }
 
@@ -179,6 +191,7 @@ class LinkPrefs @Inject constructor(
             wakeMac = prefs.getString("wakeMac", d.wakeMac).orEmpty(),
             wakeBroadcast = prefs.getString("wakeBroadcast", d.wakeBroadcast).orEmpty(),
             clipSync = prefs.getBoolean("clipSync", d.clipSync),
+            board = prefs.getString("board", "").orEmpty(),
             // a computer picked by a build before keys gets one now; it will ask once more
             key = prefs.getString("key", "").orEmpty().ifBlank {
                 if (prefs.getString("host", "").isNullOrBlank()) "" else newKey().also { made -> prefs.edit { putString("key", made) } }
@@ -199,17 +212,23 @@ data class KnownComputer(
     val name: String, val host: String, val port: Int, val ticket: String = "", val wakeMac: String = "", val wakeBroadcast: String = "",
     /** What its token is made from ([LinkPrefs.tokenFor]). */
     val key: String = "",
+    /** The dashboard's id for it, when it was picked from the dashboard's list ([LinkConfig.board]). */
+    val board: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject().put("name", name).put("host", host).put("port", port).put("ticket", ticket)
-        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast).put("key", key)
+        .put("wakeMac", wakeMac).put("wakeBroadcast", wakeBroadcast).put("key", key).put("board", board)
 
     companion object {
-        fun fromJson(o: JSONObject): KnownComputer? {
+        /**
+         * One saved by a build before keys gets one from [newKey]: it stays on the list with
+         * what wakes it, and its computer asks once more.
+         */
+        fun fromJson(o: JSONObject, newKey: () -> String): KnownComputer? {
             val host = o.optString("host")
-            val key = o.optString("key")
-            if (host.isBlank() || key.isBlank()) return null
+            if (host.isBlank()) return null
             return KnownComputer(o.optString("name").ifBlank { host.substringBefore(',') }, host, o.optInt("port", LinkProtocol.PORT),
-                o.optString("ticket"), o.optString("wakeMac"), o.optString("wakeBroadcast"), key)
+                o.optString("ticket"), o.optString("wakeMac"), o.optString("wakeBroadcast"), o.optString("key").ifBlank { newKey() },
+                o.optString("board"))
         }
     }
 }

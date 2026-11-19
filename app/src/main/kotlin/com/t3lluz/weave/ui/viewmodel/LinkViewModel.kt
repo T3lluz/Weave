@@ -73,11 +73,13 @@ class LinkViewModel @Inject constructor(
             val found = directory.laptops()
             _laptops.value = found
             // The dashboard says the saved computer restarted with a new ticket, or moved: keep what is
-            // saved in step. Only the dashboard may: it is asked over HTTPS at an address the owner
-            // set. What the network answered is never written over a saved computer, and a ticket is
-            // never traded for none (a code just scanned would be lost before it was used).
+            // saved in step. Only the dashboard's own entry for it may, the one whose id the phone
+            // kept when the computer was picked from the dashboard's list: one that merely has the
+            // same name could be another computer, and the saved token would go to it. What the
+            // network answered is never written over a saved computer, and a ticket is never traded
+            // for none (a code just scanned would be lost before it was used).
             val saved = prefs.config.value
-            found.hosts.firstOrNull { it.fromDashboard && it.name == saved.name && saved.name.isNotBlank() }?.let { h ->
+            found.hosts.firstOrNull { it.fromDashboard && saved.board.isNotBlank() && it.id == saved.board }?.let { h ->
                 val addresses = h.addresses.joinToString(",")
                 val ticket = h.ticket.ifBlank { saved.ticket }
                 if (saved.ticket != ticket || saved.host != addresses) prefs.update { it.copy(host = addresses, port = h.port, ticket = ticket) }
@@ -96,6 +98,8 @@ class LinkViewModel @Inject constructor(
             it.copy(
                 host = laptop.addresses.joinToString(","), port = laptop.port, name = laptop.name, ticket = laptop.ticket,
                 key = known?.key ?: prefs.newKey(), wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty(),
+                // picked from the dashboard's list: its id there is what ties the two from now on
+                board = if (laptop.fromDashboard) laptop.id else known?.board.orEmpty(),
             )
         }
         session.reconnect()
@@ -110,7 +114,7 @@ class LinkViewModel @Inject constructor(
 
     fun disconnect() {
         shortcutSheet = null
-        prefs.update { it.copy(host = "", name = "", ticket = "", key = "", wakeMac = "", wakeBroadcast = "") }
+        prefs.update { it.copy(host = "", name = "", ticket = "", key = "", board = "", wakeMac = "", wakeBroadcast = "") }
         session.stop()
         // the laptop tells the dashboard it is free within a moment; ask again then, so the
         // list doesn't say this phone is still using it
@@ -169,7 +173,7 @@ class LinkViewModel @Inject constructor(
         // computer must never go to an address a code brought
         prefs.update {
             it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code,
-                key = prefs.newKey(), wakeMac = "", wakeBroadcast = "")
+                key = prefs.newKey(), board = "", wakeMac = "", wakeBroadcast = "")
         }
         session.reconnect()
     }
@@ -181,7 +185,7 @@ class LinkViewModel @Inject constructor(
         val known = prefs.known.value.firstOrNull { it.host == typed && it.port == port }
         prefs.update {
             it.copy(host = typed, port = port, name = known?.name ?: typed, ticket = "", key = known?.key ?: prefs.newKey(),
-                wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty())
+                board = known?.board.orEmpty(), wakeMac = known?.wakeMac.orEmpty(), wakeBroadcast = known?.wakeBroadcast.orEmpty())
         }
         session.reconnect()
     }

@@ -109,6 +109,8 @@ class Injector:
         self._notch_y = self._notch_x = 0.0
         self._held: set[int] = set()
         self._queue: asyncio.Queue = asyncio.Queue()
+        self._typing = False          # a text is on its way out right now
+        self._closing = False
         self._worker = asyncio.create_task(self._drain())
         self.has_wtype = shutil.which("wtype") is not None
         # the characters this keyboard's layout types, read from Hyprland and kept a little while
@@ -193,8 +195,19 @@ class Injector:
         if value:
             self._queue.put_nowait(("text", value))
 
-    def release_all(self):
-        """Lets go of whatever a dropped connection left held."""
+    def release_all(self, finish: bool = False):
+        """Lets go of whatever a dropped connection left held, and stops its typing where it is:
+        what waited to be typed is dropped and the text on its way out is cut off, so the rest
+        of a sentence never comes out under the next phone's fingers. With [finish], what was
+        asked for is still typed to the end: a shortcut run from the phone's home screen closes
+        its line the moment its last step is sent."""
+        if not finish and getattr(self, "_worker", None):
+            while not self._queue.empty():
+                self._queue.get_nowait()
+            if self._typing and not self._closing:
+                self._worker.cancel()
+                self._typing = False
+                self._worker = asyncio.create_task(self._drain())
         for code in list(self._held):
             device = self.mouse if code >= 0x100 else self.keyboard
             device.emit((EV_KEY, code, 0))
@@ -247,11 +260,17 @@ class Injector:
     async def _wtype(self, part: str):
         if not part or not self.has_wtype:
             return
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec("wtype", "--", part, stderr=asyncio.subprocess.DEVNULL)
             await asyncio.wait_for(proc.wait(), 5)
         except (OSError, asyncio.TimeoutError):
             pass
+        except asyncio.CancelledError:
+            # cut off (the phone dropped): the rest of this stretch isn't typed either
+            if proc and proc.returncode is None:
+                proc.kill()
+            raise
         # the compositor swaps keymaps between wtype's keyboard and ours; give it a beat
         await asyncio.sleep(0.004)
 
@@ -290,7 +309,11 @@ class Injector:
                     # letters typed in a burst go out as one string
                     while not self._queue.empty() and self._queue._queue[0][0] == "text":
                         value += self._queue.get_nowait()[1]
-                    await self._type(value)
+                    self._typing = True
+                    try:
+                        await self._type(value)
+                    finally:
+                        self._typing = False
                 else:
                     self._key_now(item[1], item[2], item[3])
                     await asyncio.sleep(0.002)
@@ -298,6 +321,7 @@ class Injector:
                 print(f"weave: input: {err}")
 
     def close(self):
+        self._closing = True
         self._worker.cancel()
         self.release_all()
         self.mouse.close()

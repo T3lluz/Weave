@@ -32,6 +32,8 @@ data class LinkHost(
     val fromDashboard: Boolean = false,
     /** For a computer this phone knows: the key its token is made from. Blank for one it has never been let into. */
     val key: String = "",
+    /** For a computer this phone knows: the dashboard's id for it, when it was picked from the dashboard's list. */
+    val board: String = "",
 )
 
 data class LinkDirectoryState(
@@ -70,7 +72,7 @@ class LinkDirectory @Inject constructor(
             async {
                 val addresses = k.host.split(',').map { it.trim() }.filter { it.isNotEmpty() }
                 LinkHost(id = "known:${k.key}", name = k.name, addresses = addresses, port = k.port, ticket = k.ticket,
-                    online = answers(addresses, k.port), busy = false, key = k.key)
+                    online = answers(addresses, k.port), busy = false, key = k.key, board = k.board)
             }
         }
         val listed = fromDashboard()

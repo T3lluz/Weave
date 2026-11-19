@@ -362,6 +362,28 @@ class Switching(Harness):
         self.assertEqual(released, [], "replace_sessions let go already; the new session's keys stay")
 
 
+    async def test_a_shortcut_line_that_closes_lets_its_text_finish(self):
+        calls = []
+        d = self.s.daemon
+        d.log = lambda *_: None
+        d.injector = SimpleNamespace(release_all=lambda **k: calls.append(k))
+        self.s.authorized = self.s.quiet = True
+        d.sessions.add(self.s)
+        await self.s.close()
+        self.assertEqual(calls, [{"finish": True}], "150 ms after its last step is too soon to stop typing")
+
+    async def test_a_shortcut_line_cut_off_for_asking_too_much_stops_typing(self):
+        calls = []
+        d = self.s.daemon
+        d.log = lambda *_: None
+        d.injector = SimpleNamespace(release_all=lambda **k: calls.append(k))
+        self.s.authorized = self.s.quiet = True
+        d.sessions.add(self.s)
+        await self.s.handle({"t": "video", "on": True})
+        await settle()
+        self.assertTrue(self.s.closed)
+        self.assertEqual(calls, [{}])
+
     async def test_a_recorder_that_only_wrote_its_setup_still_backs_off(self):
         await self.s.set_video(True, "auto", "mid")
         live("A")[0].frame()
@@ -627,6 +649,49 @@ class Buttons(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Typing(unittest.IsolatedAsyncioTestCase):
+    injector = Buttons.injector
+
+    def typist(self, typed):
+        """An injector whose typing is slow and written down instead of done."""
+        from weave.inject import Injector
+        inj = self.injector()
+        inj._queue, inj._typing, inj._closing, inj.debug = asyncio.Queue(), False, False, False
+
+        async def slow(value):
+            for ch in value:
+                await asyncio.sleep(0.01)
+                typed.append(ch)
+
+        inj._type = slow
+        inj._worker = asyncio.create_task(Injector._drain(inj))
+        return inj
+
+    async def test_a_dropped_phone_stops_typing_where_it_is(self):
+        typed = []
+        inj = self.typist(typed)
+        inj.text("a long sentence")
+        await asyncio.sleep(0.035)
+        inj.text("and one waiting behind it")
+        inj.release_all()
+        await asyncio.sleep(0.1)
+        self.assertLess(len(typed), 6, "cut off, and what waited is dropped")
+        inj.text("ok")
+        await asyncio.sleep(0.05)
+        self.assertEqual("".join(typed)[-2:], "ok", "and it types again for the next phone")
+        inj._worker.cancel()
+
+    async def test_a_shortcut_from_the_home_screen_is_typed_to_the_end(self):
+        typed = []
+        inj = self.typist(typed)
+        inj.text("mail@example.com")
+        await asyncio.sleep(0.015)
+        inj.release_all(finish=True)
+        await asyncio.sleep(0.3)
+        self.assertEqual("".join(typed), "mail@example.com")
+        inj._worker.cancel()
 
 
 class Clipboard(Harness):
