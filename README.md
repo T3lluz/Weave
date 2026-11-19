@@ -7,7 +7,7 @@ The computer side is Weave too: a small program for Linux (Hyprland) and Windows
 ## What it does
 
 - The laptop's screen, live. Pinch to zoom; the view follows the pointer and slides across when the pointer moves to another monitor.
-- A trackpad. One finger moves, a tap clicks, a held finger drags, two fingers scroll, a two-finger tap is the right button.
+- A trackpad. One finger moves, a tap clicks, a held finger drags, two fingers scroll, a two-finger tap is the right button. Two fingers swept sideways go back and forward, as on a laptop's own pad.
 - The phone's keyboard types on the laptop. It comes up by itself when a click lands in a text field.
 - Shortcuts over the trackpad, one step or several: bring an app to the front, open a page, press keys, type, wait. Describe one to Claude ("deafen me on Discord") and it plans the steps and picks icons, or build it by hand. A shortcut can flip between two looks, like Deafen and Undeafen.
 - Fold the screen away to make the phone one big trackpad, and fold the shortcuts away to give the pad their room.

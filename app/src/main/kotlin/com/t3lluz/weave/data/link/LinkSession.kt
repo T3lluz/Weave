@@ -604,6 +604,15 @@ class LinkSession @Inject constructor(
         if (drawsPointer) localPointer.sent(dx, dy, android.os.SystemClock.uptimeMillis(), seq)
     }
     fun scroll(dx: Float, dy: Float) = send("""{"t":"scroll","dx":${round2(dx)},"dy":${round2(dy)}}""")
+    /**
+     * Two fingers or more on the pad, for the computer's own touchpad ([TOUCHPAD]): each finger's
+     * number and where it is in mm; none lifts them all. [natural] is the way the phone wants
+     * scrolling to go, which the computer squares with its own.
+     */
+    fun touch(fingers: List<Triple<Long, Float, Float>>, natural: Boolean) {
+        val f = fingers.joinToString(",") { "[${it.first},${round2(it.second)},${round2(it.third)}]" }
+        send("""{"t":"touch","nat":$natural,"f":[$f]}""")
+    }
     fun click(button: String = "left", count: Int = 1) = send("""{"t":"click","btn":"$button","n":$count}""")
     fun button(button: String, down: Boolean) = send("""{"t":"b","btn":"$button","down":$down}""")
 
@@ -774,6 +783,8 @@ class LinkSession @Inject constructor(
         const val LOCAL_CURSOR = "localcursor"
         /** This tandem sends its clipboard as it changes, for the phone to keep the two in step. */
         const val CLIP_SYNC = "clipsync"
+        /** This computer has a touchpad of its own for the phone's fingers ("touch"): it reads swipes and pinches itself. */
+        const val TOUCHPAD = "touchpad"
     }
 }
 

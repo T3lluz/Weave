@@ -778,6 +778,20 @@ class Session:
                 self.send_json({"t": "toast", "msg": f"That key isn't bound on {d.host} any more."})
         elif t == "text":
             inj.text(str(msg.get("s", "")))
+        elif t == "touch":
+            # Two fingers or more on the phone's pad, laid on the touchpad as they are there. The
+            # phone says which way it wants scrolling to go; where this desktop's touchpads go
+            # the other way, the fingers are laid the other way round.
+            pad = getattr(inj, "pad", None)
+            if pad:
+                fingers = [f for f in (msg.get("f") or [])[:5] if isinstance(f, list) and len(f) == 3]
+                turned = False
+                if fingers and not pad.touched:
+                    turned = bool(msg.get("nat")) != await d.touchpad_natural()
+                try:
+                    pad.frame([(int(n), min(max(float(x), -2000.0), 2000.0), min(max(float(y), -2000.0), 2000.0)) for n, x, y in fingers], turned)
+                except (TypeError, ValueError):
+                    pad.lift()
         elif t == "media":
             inj.key(str(msg.get("cmd", "")))
         elif t == "video":
@@ -1023,7 +1037,8 @@ class Daemon:
             "t": "welcome", "host": self.host, "ver": __version__, "laptopSound": bool(self.cfg["remote"]["sound"]),
             "monitors": monitor_list(mons),
             # what this weave can do beyond the first version, for the phone to offer
-            "caps": shell.CAPS,
+            # a touchpad of its own for the phone's fingers, where the system gives one
+            "caps": [*shell.CAPS, *(["touchpad"] if getattr(getattr(self, "injector", None), "pad", None) else [])],
             # how far the pointer goes per unit of the phone's moves, so the pointer it draws lands exactly
             "gain": await hypr.pointer_gain(),
             # what the phone needs to wake this laptop from sleep on the same network
@@ -1101,6 +1116,15 @@ class Daemon:
             self.log(f"{self.phone.model}'s sound plays here" if now[1] else "The phone's sound went back to the phone")
         self._was = now
         self.dashboard.poke()
+
+    async def touchpad_natural(self) -> bool:
+        """Which way this desktop scrolls its touchpads, asked at most every few seconds."""
+        now = time.monotonic()
+        known = getattr(self, "_pad_natural", None)
+        if known is None or now - known[1] > 5:
+            turn = getattr(hypr, "touchpad_natural", None)
+            known = self._pad_natural = (bool(await turn()) if turn else False, now)
+        return known[0]
 
     def ensure_injector(self) -> Injector | None:
         if not self.injector:

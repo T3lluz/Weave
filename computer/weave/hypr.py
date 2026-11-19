@@ -144,6 +144,14 @@ async def hardware_cursors() -> int | None:
         return None
 
 
+async def touchpad_natural() -> bool:
+    """Whether Hyprland scrolls its touchpads the natural way (the page follows the fingers)."""
+    try:
+        return bool(json.loads(await request("j/getoption input:touchpad:natural_scroll")).get("int", 0))
+    except (ValueError, TypeError):
+        return False
+
+
 async def pointer_gain() -> float | None:
     """Laptop pixels per unit of weave's mouse: 1 + sensitivity on the flat profile, which adds no
     acceleration. None on another profile, where it depends on speed and the phone has to learn it."""

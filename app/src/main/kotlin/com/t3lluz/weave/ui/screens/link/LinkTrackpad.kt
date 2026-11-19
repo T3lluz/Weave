@@ -8,6 +8,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -200,6 +205,8 @@ internal fun LinkTrackpad(
     hint: Boolean,
     buttons: Boolean,
     modifier: Modifier = Modifier,
+    /** The computer reads two fingers and more itself ([LinkSession.TOUCHPAD]). */
+    nativePad: Boolean = false,
     /** A finger is on the pad (true) or has lifted (false). */
     onTouch: (Boolean) -> Unit = {},
 ) {
@@ -211,6 +218,15 @@ internal fun LinkTrackpad(
     // a dent per finger: where each is and how far the cloth is pressed there, read only while drawing
     val dents = remember { List(DENTS) { Dent() } }
     var anyFinger by remember { mutableStateOf(false) }
+    // two fingers just flicked sideways: which way (true is back), and a count so the same way twice shows twice
+    var swept by remember { mutableStateOf<Boolean?>(null) }
+    var sweeps by remember { mutableIntStateOf(0) }
+    LaunchedEffect(sweeps) {
+        if (sweeps > 0) {
+            kotlinx.coroutines.delay(SWEEP_SHOWN_MS)
+            swept = null
+        }
+    }
     dents.forEach { dent ->
         LaunchedEffect(dent.touching) {
             if (dent.touching) dent.depth.animateTo(1f, AppMotion.Link.dentIn()) else dent.depth.animateTo(0f, AppMotion.Link.dentOut())
@@ -262,6 +278,12 @@ internal fun LinkTrackpad(
                         if (anyFinger != fingers.isNotEmpty()) onTouch(fingers.isNotEmpty())
                         anyFinger = fingers.isNotEmpty()
                     },
+                    nativePad = nativePad,
+                    onSweep = { back ->
+                        haptics.thresholdActivate()
+                        swept = back
+                        sweeps++
+                    },
                 ),
         ) {
             // what the pad does, until a finger has been on it
@@ -270,13 +292,17 @@ internal fun LinkTrackpad(
                 enter = fadeIn(AppMotion.fadeTween()), exit = fadeOut(AppMotion.revealTween()),
                 modifier = Modifier.align(Alignment.Center).padding(bottom = 56.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Gesture(AppIcons.MousePointer, "Tap", "to click")
                     Gesture(AppIcons.Move, "Hold", "to drag")
                     Gesture(AppIcons.SwapVertical, "Two fingers", "to scroll")
+                    Gesture(AppIcons.SwapHorizontal, "Sideways", "back, forward")
                 }
             }
         }
+        // back comes in from the left as it does in a browser, forward from the right
+        SweepMark(swept == true, back = true, reduced, Modifier.align(Alignment.CenterStart))
+        SweepMark(swept == false, back = false, reduced, Modifier.align(Alignment.CenterEnd))
         AnimatedVisibility(
             visible = buttons,
             enter = fadeIn(AppMotion.fadeTween()), exit = fadeOut(AppMotion.fadeTween()),
@@ -384,6 +410,29 @@ private fun MouseGlyph(left: Boolean, lit: () -> Float) {
         drawPath(body, LinkHandsTone, style = Stroke(stroke))
         drawLine(LinkHandsTone, Offset(size.width / 2, 0f), Offset(size.width / 2, split), stroke)
         drawLine(LinkHandsTone, Offset(0f, split), Offset(size.width, split), stroke)
+    }
+}
+
+/** How long the mark of a sweep stays. */
+private const val SWEEP_SHOWN_MS = 650L
+
+/** Says which way a flick just went: a pill at the side the page comes from. */
+@Composable
+private fun SweepMark(visible: Boolean, back: Boolean, reduced: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(90)) + if (reduced) fadeIn(tween(90)) else slideInHorizontally(spring(dampingRatio = 0.62f, stiffness = 700f)) { if (back) -it else it },
+        exit = fadeOut(AppMotion.revealTween()),
+        modifier = modifier.padding(horizontal = 14.dp),
+    ) {
+        Row(
+            Modifier.clip(CircleShape).background(lerp(roomColor(LinkHandsTone), LinkHandsTone, 0.22f)).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (back) Icon(AppIcons.ChevronLeft, null, tint = LinkHandsTone, modifier = Modifier.size(18.dp))
+            Text(if (back) "Back" else "Forward", style = HealthDisplay, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            if (!back) Icon(AppIcons.ChevronRight, null, tint = LinkHandsTone, modifier = Modifier.size(18.dp))
+        }
     }
 }
 

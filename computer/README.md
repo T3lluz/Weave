@@ -62,6 +62,7 @@ Settings live in `~/.config/weave/config.json` on Linux and `%APPDATA%\Weave\con
 | --- | --- | --- |
 | Screen, every monitor | yes | yes |
 | Mouse, keyboard, text in any language | yes | yes |
+| Two fingers as on the computer's own touchpad: swipe back and forward, pinch, the desktop's gestures | yes (a touchpad of its own) | a quick sideways flick goes back and forward |
 | The computer's sound on the phone | yes | yes |
 | Clipboard both ways, and kept in sync | yes | yes |
 | Apps with their icons, for shortcuts | yes | yes |

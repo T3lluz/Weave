@@ -384,6 +384,27 @@ class Switching(Harness):
         self.assertTrue(self.s.closed)
         self.assertEqual(calls, [{}])
 
+    async def test_fingers_from_the_phone_go_on_the_touchpad_turned_when_the_desktop_scrolls_the_other_way(self):
+        frames = []
+        pad = SimpleNamespace(touched=False, frame=lambda f, turned: frames.append((f, turned)), lift=lambda: frames.append("lift"))
+        d = self.s.daemon
+        d.injector = SimpleNamespace(pad=pad)
+
+        async def natural():
+            return False
+
+        d.touchpad_natural = natural
+        await self.s.handle({"t": "touch", "nat": True, "f": [[1, 20.5, 40], [2, 40, 44], "junk", [3, 1]]})
+        self.assertEqual(frames, [([(1, 20.5, 40.0), (2, 40.0, 44.0)], True)])
+        await self.s.handle({"t": "touch", "nat": False, "f": [[1, 1e9, "x"]]})
+        self.assertEqual(frames[-1], "lift", "a frame that makes no sense lifts the fingers")
+        await self.s.handle({"t": "touch", "f": []})
+        self.assertEqual(frames[-1], ([], False))
+
+    async def test_fingers_sent_to_a_computer_with_no_touchpad_do_nothing(self):
+        self.s.daemon.injector = SimpleNamespace()
+        await self.s.handle({"t": "touch", "f": [[1, 2, 3], [2, 3, 4]]})
+
     async def test_a_recorder_that_only_wrote_its_setup_still_backs_off(self):
         await self.s.set_video(True, "auto", "mid")
         live("A")[0].frame()
@@ -649,6 +670,84 @@ class Buttons(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FingersOnThePad(unittest.TestCase):
+    """The touchpad the phone's fingers are laid on, with the kernel's device written down instead."""
+
+    def pad(self):
+        from weave import inject
+        self.sent = []
+        device = SimpleNamespace(emit=lambda *e: self.sent.append(list(e)), close=lambda: None)
+        return inject, inject.Touchpad(device)
+
+    def last(self, code):
+        return [v for frame in self.sent for t, c, v in frame if c == code][-1]
+
+    def test_two_fingers_land_round_the_middle_and_keep_their_places_to_each_other(self):
+        inject, pad = self.pad()
+        pad.frame([(7, 20.0, 40.0), (9, 40.0, 44.0)])
+        frame = self.sent[0]
+        xs = [v for t, c, v in frame if c == inject.ABS_MT_POSITION_X]
+        ys = [v for t, c, v in frame if c == inject.ABS_MT_POSITION_Y]
+        middle = inject.PAD_MM / 2 * inject.PAD_UNITS_PER_MM
+        self.assertEqual(sum(xs) / 2, middle)
+        self.assertEqual(sum(ys) / 2, middle)
+        self.assertEqual(xs[1] - xs[0], 20 * inject.PAD_UNITS_PER_MM, "20 mm apart on the phone, 20 mm apart here")
+        self.assertIn((inject.EV_KEY, inject.BTN_TOUCH, 1), frame)
+        self.assertIn((inject.EV_KEY, inject.BTN_TOOL[1], 1), frame, "two fingers")
+        self.assertEqual(len({v for t, c, v in frame if c == inject.ABS_MT_TRACKING_ID}), 2)
+
+    def test_moving_says_only_what_moved_and_lifting_lets_go(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        pad.frame([(1, 25.0, 40.0), (2, 40.0, 40.0)])
+        moved = self.sent[1]
+        self.assertEqual([v for t, c, v in moved if c == inject.ABS_MT_SLOT], [0], "the still finger says nothing")
+        self.assertNotIn(inject.ABS_MT_TRACKING_ID, [c for t, c, v in moved])
+        pad.frame([(1, 25.0, 40.0), (2, 40.0, 40.0)])
+        self.assertEqual(len(self.sent), 2, "nothing moved, nothing sent")
+        pad.lift()
+        gone = self.sent[-1]
+        self.assertEqual([v for t, c, v in gone if c == inject.ABS_MT_TRACKING_ID], [-1, -1])
+        self.assertIn((inject.EV_KEY, inject.BTN_TOUCH, 0), gone)
+        self.assertIn((inject.EV_KEY, inject.BTN_TOOL[1], 0), gone)
+        self.assertFalse(pad.touched)
+
+    def test_a_third_finger_joins_and_the_count_follows(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0), (3, 60.0, 40.0)])
+        joined = self.sent[-1]
+        self.assertIn((inject.EV_KEY, inject.BTN_TOOL[1], 0), joined)
+        self.assertIn((inject.EV_KEY, inject.BTN_TOOL[2], 1), joined)
+        self.assertNotIn((inject.EV_KEY, inject.BTN_TOUCH, 1), joined, "the pad was touched already")
+
+    def test_turned_round_the_same_stroke_goes_the_other_way(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)], turned=True)
+        before = self.last(inject.ABS_X)
+        pad.frame([(1, 30.0, 40.0), (2, 50.0, 40.0)], turned=True)
+        self.assertLess(self.last(inject.ABS_X), before, "to the right on the phone, to the left here")
+
+    def test_a_stroke_off_the_pad_stops_at_its_rim_and_more_fingers_than_it_has_are_left_out(self):
+        inject, pad = self.pad()
+        pad.frame([(n, 10.0 * n, 0.0) for n in range(8)])
+        self.assertEqual(len({v for t, c, v in self.sent[0] if c == inject.ABS_MT_TRACKING_ID}), inject.PAD_FINGERS)
+        pad.frame([(0, 9000.0, -9000.0)])
+        top = inject.PAD_MM * inject.PAD_UNITS_PER_MM
+        self.assertTrue(0 < self.last(inject.ABS_MT_POSITION_X) < top)
+        self.assertTrue(0 < self.last(inject.ABS_MT_POSITION_Y) < top)
+
+    def test_letting_go_of_everything_lifts_the_fingers_too(self):
+        from weave.inject import Injector
+        inject, pad = self.pad()
+        inj = Injector.__new__(Injector)
+        inj.mouse = inj.keyboard = SimpleNamespace(emit=lambda *e: None)
+        inj._held, inj.pad = set(), pad
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        inj.release_all()
+        self.assertFalse(pad.touched)
 
 
 class Typing(unittest.IsolatedAsyncioTestCase):

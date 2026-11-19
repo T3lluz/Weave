@@ -589,6 +589,7 @@ private fun Upright(
                 hint = !viewModel.touched && !imeVisible,
                 buttons = !imeVisible,
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                nativePad = LinkSession.TOUCHPAD in state.caps,
                 onTouch = { padDown = it },
             )
             AnimatedVisibility(
@@ -669,6 +670,7 @@ private fun Sideways(
             LinkTrackpad(
                 viewModel = viewModel, config = config, hint = !viewModel.touched && !imeVisible, buttons = !imeVisible,
                 modifier = Modifier.fillMaxSize().hazeSource(hazeState).padding(12.dp),
+                nativePad = LinkSession.TOUCHPAD in state.caps,
             )
         } else LinkPreview(
             session = session, geometry = geometry, zoom = 1f, fill = false, error = state.videoError,

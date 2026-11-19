@@ -1,6 +1,10 @@
-"""Mouse and keyboard for the laptop, driven by the phone.
+"""Mouse, keyboard and touchpad for the laptop, driven by the phone.
 
-Two uinput devices (the kernel's virtual input, /dev/uinput): a mouse and a keyboard.
+Three uinput devices (the kernel's virtual input, /dev/uinput): a mouse, a keyboard and a
+touchpad. One finger on the phone's pad is the mouse. Two fingers and more are laid on the
+touchpad where they are on the phone, so the desktop reads them as it reads the laptop's own
+pad: scrolling that rolls on, a sideways swipe that goes back in a browser, pinching, and
+whatever gestures Hyprland is set to act on.
 Keys by position go through the keyboard. Text the phone's keyboard commits goes through the
 keyboard too, as the keys the laptop's layout types it with (keymap.py); what the layout can't
 type goes through wtype. Keys and text share one queue so a backspace never overtakes the word
@@ -18,12 +22,21 @@ import time
 from . import hypr
 from .keymap import Stroke, strokes_for
 
-EV_SYN, EV_KEY, EV_REL = 0, 1, 2
+EV_SYN, EV_KEY, EV_REL, EV_ABS = 0, 1, 2, 3
+ABS_X, ABS_Y, ABS_MT_SLOT, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID = 0x00, 0x01, 0x2F, 0x35, 0x36, 0x39
+BTN_TOUCH = 0x14A
+# which of these is down says how many fingers are on the pad: one, two, three, four, five
+BTN_TOOL = (0x145, 0x14D, 0x14E, 0x14F, 0x148)
 REL_X, REL_Y, REL_HWHEEL, REL_WHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES = 0, 1, 6, 8, 11, 12
 BTN = {"left": 0x110, "right": 0x111, "middle": 0x112, "back": 0x113, "forward": 0x114}
 
 UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_RELBIT = 0x40045564, 0x40045565, 0x40045566
 UI_DEV_SETUP, UI_DEV_CREATE, UI_DEV_DESTROY = 0x405C5503, 0x5501, 0x5502
+UI_SET_ABSBIT, UI_SET_PROPBIT, UI_ABS_SETUP = 0x40045567, 0x4004556E, 0x401C5504
+
+# The touchpad: far larger than any phone, so the fingers (laid round its middle) never reach
+# the rims, where libinput takes a touch for a palm. Sizes in mm; the kernel gets units.
+PAD_MM, PAD_UNITS_PER_MM, PAD_FINGERS = 240, 20, 5
 
 # Linux key codes by the name the phone sends. Letters and digits sit where QWERTY has them,
 # which holds for the Nordic layouts too, so ctrl+c is ctrl+c.
@@ -67,19 +80,32 @@ def key_code(name: str) -> int | None:
 
 
 class _Device:
-    def __init__(self, name: str, keys, rels=()):
+    def __init__(self, name: str, keys, rels=(), axes=(), product: int = 0x0001):
+        """[axes] are (code, lowest, highest, units per mm): an absolute device, a pointer one (a touchpad)."""
         self.fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
-        fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
-        for code in keys:
-            fcntl.ioctl(self.fd, UI_SET_KEYBIT, code)
-        if rels:
-            fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_REL)
-            for code in rels:
-                fcntl.ioctl(self.fd, UI_SET_RELBIT, code)
-        # struct uinput_setup: input_id (bus, vendor, product, version), name[80], ff_effects_max
-        setup = struct.pack("HHHH80sI", 0x03, 0x7A6D, 0x0001, 1, name.encode(), 0)
-        fcntl.ioctl(self.fd, UI_DEV_SETUP, setup)
-        fcntl.ioctl(self.fd, UI_DEV_CREATE)
+        try:
+            fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
+            for code in keys:
+                fcntl.ioctl(self.fd, UI_SET_KEYBIT, code)
+            if rels:
+                fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_REL)
+                for code in rels:
+                    fcntl.ioctl(self.fd, UI_SET_RELBIT, code)
+            if axes:
+                fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_ABS)
+                for code, *_ in axes:
+                    fcntl.ioctl(self.fd, UI_SET_ABSBIT, code)
+                fcntl.ioctl(self.fd, UI_SET_PROPBIT, 0)   # INPUT_PROP_POINTER: moves a pointer, isn't a screen
+            # struct uinput_setup: input_id (bus, vendor, product, version), name[80], ff_effects_max
+            setup = struct.pack("HHHH80sI", 0x03, 0x7A6D, product, 1, name.encode(), 0)
+            fcntl.ioctl(self.fd, UI_DEV_SETUP, setup)
+            for code, low, high, per_mm in axes:
+                # struct uinput_abs_setup: code, then input_absinfo (value, min, max, fuzz, flat, resolution)
+                fcntl.ioctl(self.fd, UI_ABS_SETUP, struct.pack("H2x6i", code, 0, low, high, 0, 0, per_mm))
+            fcntl.ioctl(self.fd, UI_DEV_CREATE)
+        except OSError:
+            os.close(self.fd)
+            raise
 
     def emit(self, *events):
         """events are (type, code, value); a sync report closes the batch."""
@@ -100,10 +126,99 @@ class _Device:
             pass
 
 
+class Touchpad:
+    """The fingers on the phone's pad, laid on a touchpad of the laptop's own.
+
+    Each frame says where every finger is, in mm on the phone. The first frame of a touch puts
+    the fingers round the pad's middle; they keep their places to each other from there. The
+    kernel is told only what changed (protocol B: a slot per finger)."""
+
+    def __init__(self, device=None):
+        top = PAD_MM * PAD_UNITS_PER_MM
+        self.device = device or _Device(
+            "Weave Touchpad", (BTN["left"], BTN["right"], BTN_TOUCH, *BTN_TOOL), product=0x0003,
+            axes=((ABS_X, 0, top, PAD_UNITS_PER_MM), (ABS_Y, 0, top, PAD_UNITS_PER_MM),
+                  (ABS_MT_SLOT, 0, PAD_FINGERS - 1, 0), (ABS_MT_TRACKING_ID, 0, 65535, 0),
+                  (ABS_MT_POSITION_X, 0, top, PAD_UNITS_PER_MM), (ABS_MT_POSITION_Y, 0, top, PAD_UNITS_PER_MM)))
+        self._slots: dict[int, int] = {}                  # the phone's number for a finger: its slot
+        self._at: dict[int, tuple[int, int]] = {}         # slot: where it was last put
+        self._origin = (0.0, 0.0)
+        self._serial = 0
+        self._turned = False
+        self._first = None
+
+    @property
+    def touched(self) -> bool:
+        return bool(self._slots)
+
+    def frame(self, fingers, turned: bool = False):
+        """[fingers] are (number, x mm, y mm), all that are on the pad now; none lifts them all.
+        [turned] lays them the other way round (both axes), which is what turns the scrolling
+        round for a phone that wants it the other way than this desktop's touchpads have it."""
+        fingers = {int(n): (float(x), float(y)) for n, x, y in list(fingers)[:PAD_FINGERS]}
+        if not self._slots:
+            if not fingers:
+                return
+            # a new touch: its middle goes on the pad's middle
+            self._origin = (sum(x for x, _ in fingers.values()) / len(fingers), sum(y for _, y in fingers.values()) / len(fingers))
+            self._turned = turned
+        events = []
+        before = len(self._slots)
+        for number in [n for n in self._slots if n not in fingers]:
+            slot = self._slots.pop(number)
+            self._at.pop(slot, None)
+            events += [(EV_ABS, ABS_MT_SLOT, slot), (EV_ABS, ABS_MT_TRACKING_ID, -1)]
+        sign = -1 if self._turned else 1
+        low, high = 4 * PAD_UNITS_PER_MM, (PAD_MM - 4) * PAD_UNITS_PER_MM
+        for number, (x, y) in fingers.items():
+            px = int(min(max((PAD_MM / 2 + sign * (x - self._origin[0])) * PAD_UNITS_PER_MM, low), high))
+            py = int(min(max((PAD_MM / 2 + sign * (y - self._origin[1])) * PAD_UNITS_PER_MM, low), high))
+            slot = self._slots.get(number)
+            if slot is None:
+                free = [s for s in range(PAD_FINGERS) if s not in self._slots.values()]
+                if not free:
+                    continue
+                slot = self._slots[number] = free[0]
+                self._serial = (self._serial + 1) % 65536
+                events += [(EV_ABS, ABS_MT_SLOT, slot), (EV_ABS, ABS_MT_TRACKING_ID, self._serial),
+                           (EV_ABS, ABS_MT_POSITION_X, px), (EV_ABS, ABS_MT_POSITION_Y, py)]
+            elif self._at.get(slot) != (px, py):
+                events += [(EV_ABS, ABS_MT_SLOT, slot), (EV_ABS, ABS_MT_POSITION_X, px), (EV_ABS, ABS_MT_POSITION_Y, py)]
+            self._at[slot] = (px, py)
+        after = len(self._slots)
+        if before != after:
+            if (before == 0) != (after == 0):
+                events.append((EV_KEY, BTN_TOUCH, 1 if after else 0))
+            if before:
+                events.append((EV_KEY, BTN_TOOL[before - 1], 0))
+            if after:
+                events.append((EV_KEY, BTN_TOOL[after - 1], 1))
+        # the single-touch axes follow the first finger, as a real pad's do
+        first = self._at[min(self._at)] if self._at else None
+        if first and first != self._first:
+            events += [(EV_ABS, ABS_X, first[0]), (EV_ABS, ABS_Y, first[1])]
+        self._first = first
+        if events:
+            self.device.emit(*events)
+
+    def lift(self):
+        self.frame(())
+
+    def close(self):
+        self.lift()
+        self.device.close()
+
+
 class Injector:
     def __init__(self):
         self.mouse = _Device("Weave Mouse", BTN.values(), (REL_X, REL_Y, REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES))
         self.keyboard = _Device("Weave Keyboard", range(1, 249))
+        # the touchpad is an extra: without it two fingers scroll as a mouse's wheel does
+        try:
+            self.pad: Touchpad | None = Touchpad()
+        except OSError as err:
+            print(f"weave: no touchpad for the phone's fingers, they scroll as a wheel instead: {err}")
+            self.pad = None
         self._rx = self._ry = 0.0        # sub-pixel motion carried to the next event
         self._wy = self._wx = 0.0        # wheel, in 120ths of a notch
         self._notch_y = self._notch_x = 0.0
@@ -213,6 +328,8 @@ class Injector:
             device.emit((EV_KEY, code, 0))
         self._held.clear()
         self._presses = {}
+        if getattr(self, "pad", None):
+            self.pad.lift()   # fingers a dropped phone left on the touchpad
 
     def _key_now(self, name: str, mods, down):
         code = key_code(name)
@@ -324,5 +441,7 @@ class Injector:
         self._closing = True
         self._worker.cancel()
         self.release_all()
+        if self.pad:
+            self.pad.close()
         self.mouse.close()
         self.keyboard.close()

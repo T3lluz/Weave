@@ -36,6 +36,23 @@ private const val TAP_MS = 320L
 /** Finger travel, in dp, for one notch of the wheel. */
 private const val DP_PER_NOTCH = 26f
 
+/**
+ * Two fingers flicked sideways, where the phone has to tell that itself: this far, within this
+ * long of landing, and this many times further sideways than up or down. Slower or shorter, it
+ * is a scroll sideways.
+ */
+private const val SWEEP_DP = 72f
+private const val FLICK_MS = 380L
+private const val FLICK_SIDEWAYS = 2.5f
+
+/**
+ * Which way fingers that have gone [travel] have swept, once that is [far] enough and
+ * [sideways] times further across than up or down: true to the right, false to the left, null
+ * when it is neither yet.
+ */
+internal fun sweep(travel: Offset, far: Float, sideways: Float = 1.5f): Boolean? =
+    if (abs(travel.x) >= far && abs(travel.x) > abs(travel.y) * sideways) travel.x > 0 else null
+
 /** Two-finger speed, in notches per millisecond, that starts a roll, and where a roll ends. */
 private const val FLING_MIN = 0.006f
 private const val FLING_END = 0.0012f
@@ -44,6 +61,13 @@ private const val FLING_END = 0.0012f
  * A laptop trackpad under the thumb. One finger moves the pointer (faster strokes travel
  * further), a tap clicks, a held finger drags, two fingers scroll and the page keeps rolling
  * after they lift, a two-finger tap is the right button and a three-finger tap the middle one.
+ *
+ * With [nativePad] the computer has a touchpad of its own for the phone's fingers: from two
+ * fingers up they are sent as they are, and its desktop reads them as it reads its own pad. So
+ * scrolling rolls on there, two fingers swept sideways go back and forward in a browser, a
+ * pinch zooms, and three or four fingers do whatever that desktop does with them. Without one
+ * (Windows, an older daemon) two fingers scroll as a mouse's wheel, and a quick sweep sideways
+ * presses the mouse's own back or forward button.
  */
 fun Modifier.trackpad(
     session: LinkSession,
@@ -54,9 +78,15 @@ fun Modifier.trackpad(
     onTouched: () -> Unit = {},
     /** Every finger on the pad, by its own number and where it is; empty once they have all lifted. */
     onFingers: (List<Pair<Long, Offset>>) -> Unit = {},
-): Modifier = pointerInput(session, speed, naturalScroll) {
+    /** The computer reads two fingers and more itself, on a touchpad of its own. */
+    nativePad: Boolean = false,
+    /** Two fingers flicked sideways pressed back (true) or forward: only where the phone does that itself. */
+    onSweep: (back: Boolean) -> Unit = {},
+): Modifier = pointerInput(session, speed, naturalScroll, nativePad) {
     val slop = viewConfiguration.touchSlop
     val notch = DP_PER_NOTCH * density
+    val sweepFar = SWEEP_DP * density
+    val mm = 25.4f / (160f * density)
     coroutineScope {
         var roll: Job? = null
         awaitEachGesture {
@@ -70,7 +100,14 @@ fun Modifier.trackpad(
             var moved = false
             var scrolled = false
             var dragging = false
+            var swept = false
             var scrollTravel = Offset.Zero
+            // from two fingers up: where each was when the second landed, and when that was
+            val landed = HashMap<Long, Offset>()
+            var landedAt = 0L
+            // the fingers are on the computer's touchpad right now; they were at some point
+            var onPad = false
+            var usedPad = false
             // scroll speed in notches per millisecond, smoothed, for the roll after the fingers lift
             var speedX = 0f
             var speedY = 0f
@@ -97,6 +134,17 @@ fun Modifier.trackpad(
                     // the cloth dents under each finger
                     onFingers(pressed.map { it.id.value to it.position })
                     if (pressed.size > fingers) fingers = pressed.size
+                    if (pressed.size < 2) {
+                        landed.clear()
+                        // one finger left of several: off the computer's pad, or it would move the pointer there
+                        if (onPad) {
+                            onPad = false
+                            session.touch(emptyList(), naturalScroll)
+                        }
+                    } else {
+                        if (landed.isEmpty()) landedAt = pressed[0].uptimeMillis
+                        pressed.forEach { if (it.id.value !in landed) landed[it.id.value] = it.position }
+                    }
                     if (pressed.size == 1 && (fingers == 1 || dragging)) {
                         val change = pressed[0]
                         val delta = change.positionChange()
@@ -115,7 +163,31 @@ fun Modifier.trackpad(
                         val delta = sum / pressed.size.toFloat()
                         scrollTravel += delta
                         if (!scrolled && hypot(scrollTravel.x, scrollTravel.y) > slop) scrolled = true
-                        if (scrolled && pressed.size == 2) {
+                        if (scrolled && nativePad) {
+                            if (!onPad) {
+                                // laid down where they landed, so the stroke up to here counts too
+                                onPad = true
+                                usedPad = true
+                                session.touch(pressed.map { Triple(it.id.value, landed.getValue(it.id.value).x * mm, landed.getValue(it.id.value).y * mm) }, naturalScroll)
+                            }
+                            session.touch(pressed.map { Triple(it.id.value, it.position.x * mm, it.position.y * mm) }, naturalScroll)
+                        } else if (scrolled && pressed.size == 2 && fingers == 2 && !swept) {
+                            // (a third finger ends the scroll: lifting back to two must not jolt the page)
+                            // A quick sweep plainly sideways is back or forward, as on a laptop's pad:
+                            // the page goes the way the fingers do, and the one before it follows.
+                            val quick = pressed[0].uptimeMillis - landedAt < FLICK_MS && !dragging
+                            (if (quick) sweep(scrollTravel, sweepFar, FLICK_SIDEWAYS) else null)?.let { right ->
+                                swept = true
+                                speedX = 0f
+                                speedY = 0f
+                                val back = right == naturalScroll
+                                session.click(if (back) "back" else "forward")
+                                onSweep(back)
+                            }
+                            if (swept) {
+                                event.changes.forEach { it.consume() }
+                                continue
+                            }
                             val sign = if (naturalScroll) 1f else -1f
                             // a mostly vertical stroke stays vertical
                             val dx = if (abs(delta.x) > abs(delta.y) * 0.6f) delta.x else 0f
@@ -132,13 +204,15 @@ fun Modifier.trackpad(
                 }
             } finally {
                 onFingers(emptyList())
+                if (onPad) session.touch(emptyList(), naturalScroll)
                 // a drag cut short (the phone turned, the sheet opened) must not leave the laptop's button held
                 if (dragging) session.button("left", false)
             }
             // a drag's button was let go in the finally above; a scroll may roll on, a tap clicks
             if (!dragging && scrolled) {
                 // fingers that stopped before lifting meant to stop; a flick keeps rolling
-                if (SystemClock.uptimeMillis() - scrolledAt < 70 && hypot(speedX, speedY) > FLING_MIN) {
+                // (on the computer's own touchpad its programs roll the page on themselves)
+                if (!usedPad && !swept && SystemClock.uptimeMillis() - scrolledAt < 70 && hypot(speedX, speedY) > FLING_MIN) {
                     roll = launch {
                         var x = speedX
                         var y = speedY
