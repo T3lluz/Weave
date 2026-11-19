@@ -197,6 +197,14 @@ class Touchpad:
                 if not self._timer:
                     self._timer = loop.call_later(left, self._late)
                 return
+        if not fingers and self._waiting:
+            # the fingers lift when what was kept is already due (its timer hasn't run yet):
+            # where they got to still goes first
+            if self._timer:
+                self._timer.cancel()
+            self._lift_after = True
+            self._late()
+            return
         self._forget_waiting()
         self._lay(fingers, turned)
 

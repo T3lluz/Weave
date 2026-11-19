@@ -118,21 +118,33 @@ class LinkInviteTest {
     }
 
     @Test
-    fun aCodeForAComputerThisPhoneHasIsKnownByItsId() {
+    fun aCodeForAComputerThisPhoneHasIsKnownByAnAddressTheyShare() {
         val known = listOf(
             KnownComputer("t3lluz", "192.168.1.23,100.64.0.10", 47600, key = "k1", ident = "aaa111"),
             KnownComputer("desk", "192.168.1.40", 47600, key = "k2"),
         )
-        // its own id, whatever network it is on now
-        assertEquals("k1", alreadyKnown(LinkInvite("t3lluz", listOf("10.0.0.5"), 47600, "code", id = "aaa111"), known)?.key)
+        assertEquals("k1", alreadyKnown(LinkInvite("t3lluz", listOf("10.0.0.5", "100.64.0.10"), 47600, "code", id = "aaa111"), known)?.key)
         // one that never said an id is known by an address and the port
         assertEquals("k2", alreadyKnown(LinkInvite("desk", listOf("192.168.1.40"), 47600, "code", id = "bbb222"), known)?.key)
         assertNull("another port is another program", alreadyKnown(LinkInvite("desk", listOf("192.168.1.40"), 5000, "code"), known))
         // a friend's computer at the same home address has its own id: a new one, to be paired
         assertNull(alreadyKnown(LinkInvite("theirs", listOf("192.168.1.23"), 47600, "code", id = "ccc333"), known))
-        // a code from a computer that says no id falls back to the address too
+        // a code from a computer that says no id goes by the address too
         assertEquals("k1", alreadyKnown(LinkInvite("t3lluz", listOf("100.64.0.10"), 47600, "code"), known)?.key)
         assertNull(alreadyKnown(LinkInvite("new", listOf("192.168.1.99"), 47600, "code", id = "ddd444"), known))
+    }
+
+    @Test
+    fun aStrangerThatClaimedAComputersIdIsNotTakenForIt() {
+        // the stranger was connected to last (it is first), and its welcome gave the real computer's id
+        val known = listOf(
+            KnownComputer("t3lluz", "192.168.1.66", 47600, key = "stranger", ident = "aaa111"),
+            KnownComputer("t3lluz", "192.168.1.23,100.64.0.10", 47600, key = "real", ident = "aaa111"),
+        )
+        val code = LinkInvite("t3lluz", listOf("192.168.1.23", "100.64.0.10"), 47600, "code", id = "aaa111")
+        assertEquals("the one whose addresses the code names", "real", alreadyKnown(code, known)?.key)
+        // and with only the stranger on the list, the real computer's code pairs it as new
+        assertNull(alreadyKnown(code, known.take(1)))
     }
 
     @Test

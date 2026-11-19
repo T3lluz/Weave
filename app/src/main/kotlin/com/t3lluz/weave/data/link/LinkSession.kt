@@ -466,7 +466,17 @@ class LinkSession @Inject constructor(
                     readyToHear()
                 }
                 sendJson(JSONObject().put("t", "adb").put("ips", JSONArray(ownAddresses())))
-                if (syncsClipboard) send("""{"t":"clip_sync","on":true}""")
+                if (syncsClipboard) {
+                    send("""{"t":"clip_sync","on":true}""")
+                    // A copy sent shortly before the last connection ended may never have got there:
+                    // a link that has died still takes what it is given for a few seconds. It goes
+                    // again, unless something newer has come from the laptop since. The same text
+                    // twice does nothing there.
+                    val again = clipSent
+                    if (again != null && again == clipSynced && android.os.SystemClock.uptimeMillis() - clipSentAt < CLIP_AGAIN_MS) {
+                        sendJson(JSONObject().put("t", "clip_set").put("text", again).put("quiet", true))
+                    }
+                }
                 localPointer.laptopGain(m.optDouble("gain", Double.NaN).takeIf { !it.isNaN() }?.toFloat())
                 // what wakes this laptop from sleep, kept for when it is asleep and can't say
                 m.optJSONObject("wake")?.let { w ->
@@ -708,6 +718,7 @@ class LinkSession @Inject constructor(
         if (!send(JSONObject().put("t", "clip_set").put("text", text).put("quiet", quiet).toString())) return false
         if (quiet) {
             clipSynced = text
+            clipSent = text
             clipSentAt = android.os.SystemClock.uptimeMillis()
         }
         return true
@@ -716,8 +727,9 @@ class LinkSession @Inject constructor(
     /** The last text either clipboard had while the two are kept in step: the one not to send again. */
     @Volatile var clipSynced: String? = null
 
-    /** When the phone last sent its own copy over while the two are kept in step. */
+    /** When the phone last sent its own copy over while the two are kept in step, and what it was. */
     @Volatile private var clipSentAt = 0L
+    @Volatile private var clipSent: String? = null
 
     /** When the phone's clip last looked at was made; see [LinkPrefs.clipSeen]. */
     var clipSeen: Long
@@ -869,6 +881,8 @@ class LinkSession @Inject constructor(
         const val CLIP_SYNC = "clipsync"
         /** A copy from the laptop this soon after the phone sent its own was sent before that one landed. */
         const val CLIP_CROSSED_MS = 400L
+        /** A copy sent less than this long before a reconnect is sent again: longer than a dead link takes to be noticed. */
+        const val CLIP_AGAIN_MS = 45_000L
         /** This computer has a touchpad of its own for the phone's fingers ("touch"): it reads swipes and pinches itself. */
         const val TOUCHPAD = "touchpad"
     }

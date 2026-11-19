@@ -867,6 +867,17 @@ class FingersInBunches(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(xs) / 2, middle, "and the new touch is laid round the middle, as any is")
         pad.lift()
 
+    async def test_a_lift_when_the_held_frame_is_already_due_still_writes_it_first(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        pad.frame([(1, 25.0, 40.0), (2, 45.0, 40.0)])
+        pad._wrote -= 1          # its time has come, but the loop has not got to its timer yet
+        pad.frame(())
+        self.assertEqual(len(self.sent), 3, "where the fingers got to, then up, at once")
+        self.assertEqual([v for t, c, v in self.sent[2][1] if c == inject.ABS_MT_TRACKING_ID], [-1, -1])
+        await asyncio.sleep(inject.PAD_PACE * 3)
+        self.assertEqual(len(self.sent), 3)
+
     async def test_a_phone_that_is_gone_lifts_the_fingers_at_once(self):
         inject, pad = self.pad()
         pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])

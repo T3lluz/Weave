@@ -161,11 +161,9 @@ class LinkViewModel @Inject constructor(
     private var alreadyCode = ""
 
     fun offer(invite: com.t3lluz.weave.data.link.LinkInvite) {
-        // the picked computer counts too, while it still waits to be let in
-        val cfg = prefs.config.value
-        val picked = com.t3lluz.weave.data.link.KnownComputer(cfg.name, cfg.host, cfg.port, key = cfg.key, ident = cfg.ident)
-            .takeIf { cfg.host.isNotBlank() && prefs.known.value.none { k -> k.key == cfg.key } }
-        val known = com.t3lluz.weave.data.link.alreadyKnown(invite, prefs.known.value + listOfNotNull(picked))
+        // Only computers this phone has been let into count. One that is picked but still asking
+        // (or said no, or whose question ran out) is exactly what a code is for: it is paired.
+        val known = com.t3lluz.weave.data.link.alreadyKnown(invite, prefs.known.value)
         if (known != null) {
             alreadyPaired = known
             alreadyCode = invite.code

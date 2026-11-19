@@ -51,16 +51,19 @@ fun parseInvite(text: String?): LinkInvite? {
  * The computer of [known] that [invite] is for, when this phone has it already: pairing it again
  * would only make a second entry for the same machine.
  *
- * By the computer's own id when both say one. Where one of them doesn't (a computer paired
- * before ids, or by its address), by an address and the port they share. Two with different
- * ids are two computers, whatever addresses they share: home networks hand out the same ones.
+ * It is one that shares an address and the port with the code. The computer's own id only ever
+ * says no: two with different ids are two computers, whatever addresses they share (home
+ * networks hand out the same ones). An id alone never says yes. It is no secret (it is in every
+ * code), and any computer the phone connects to can claim one in its welcome: a stranger on the
+ * Wi-Fi that claimed the id of the owner's own computer must not be taken for it when that
+ * computer's code is scanned. The same computer met again with no address in common is paired
+ * as a new one.
  */
 internal fun alreadyKnown(invite: LinkInvite, known: List<KnownComputer>): KnownComputer? =
-    known.firstOrNull { it.ident.isNotBlank() && it.ident == invite.id }
-        ?: known.firstOrNull { k ->
-            (k.ident.isBlank() || invite.id.isBlank()) && k.port == invite.port &&
-                k.host.split(',').map { it.trim() }.any { it.isNotEmpty() && it in invite.addresses }
-        }
+    known.firstOrNull { k ->
+        (k.ident.isBlank() || invite.id.isBlank() || k.ident == invite.id) && k.port == invite.port &&
+            k.host.split(',').map { it.trim() }.any { it.isNotEmpty() && it in invite.addresses }
+    }
 
 private val CODE = Regex("^[A-Za-z0-9_-]{1,64}$")
 
