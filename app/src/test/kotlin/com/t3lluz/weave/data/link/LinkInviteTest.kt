@@ -107,14 +107,14 @@ class LinkInviteTest {
         )
         // the same name under another id, with somebody's address put in front of a real one
         val namesake = LinkHost("d9", "t3lluz", listOf("203.0.113.9", "100.74.84.100"), 47600, "", online = true, busy = false, fromDashboard = true)
-        // one that shares an address with a computer paired by code
+        // one that shares only a home-network address with a computer paired by code: those repeat from house to house
         val lookalike = LinkHost("d8", "desk", listOf("203.0.113.9", "192.168.1.40"), 47600, "", online = true, busy = false, fromDashboard = true)
         // and one this phone has nothing to do with
         val stranger = LinkHost("d7", "t3lluz", listOf("100.99.0.1"), 47600, "", online = true, busy = false, fromDashboard = true)
         val (left, shown) = joinKnown(known, listOf(namesake, lookalike, stranger))
         assertEquals("both known computers stay as the phone saved them", listOf("known:k1", "known:k2"), left.map { it.id })
-        assertEquals("the two that share an address are left out, not shown as a second one", listOf("d7"), shown.map { it.id })
-        assertEquals("", shown[0].key)
+        assertEquals("the one that shares a tailnet address is left out, not shown as a second one", listOf("d8", "d7"), shown.map { it.id })
+        assertTrue("and none of them has a key", shown.all { it.key.isEmpty() })
     }
 
     @Test

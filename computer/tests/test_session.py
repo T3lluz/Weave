@@ -372,6 +372,38 @@ class Switching(Harness):
         await self.s.close()
         self.assertEqual(calls, [{"finish": True}], "150 ms after its last step is too soon to stop typing")
 
+    async def test_a_shortcut_line_may_only_type_so_much(self):
+        calls, typed = [], []
+        d = self.s.daemon
+        d.log = lambda *_: None
+        d.injector = SimpleNamespace(release_all=lambda **k: calls.append(k), text=typed.append)
+        self.s.authorized = self.s.quiet = True
+        d.sessions.add(self.s)
+        await self.s.handle({"t": "text", "s": "x" * 500})
+        self.assertEqual(len(typed), 1)
+        await self.s.handle({"t": "text", "s": "x" * server.QUIET_TEXT})
+        await settle()
+        self.assertEqual(len(typed), 1, "past the limit nothing more is typed")
+        self.assertTrue(self.s.closed)
+        self.assertEqual(calls, [{}], "and what was on its way is cut off")
+
+    async def test_opening_the_remote_while_a_shortcut_types_lets_it_finish(self):
+        calls = []
+
+        class Old:
+            def __init__(self, quiet):
+                self.key, self.replaced, self.quiet, self.cut = "k", False, quiet, False
+
+            async def close(self):
+                pass
+
+        d = SimpleNamespace(sessions={Old(True)}, injector=SimpleNamespace(release_all=lambda **k: calls.append(k)))
+        server.Daemon.replace_sessions(d, "k")
+        d.sessions = {Old(True), Old(False)}
+        server.Daemon.replace_sessions(d, "k")
+        await settle()
+        self.assertEqual(calls, [{"finish": True}, {}], "a real session among them is cut off as before")
+
     async def test_a_shortcut_line_cut_off_for_asking_too_much_stops_typing(self):
         calls = []
         d = self.s.daemon

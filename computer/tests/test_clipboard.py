@@ -137,6 +137,61 @@ class InStep(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.d.clip_seen), server.CLIP_PHONES)
         self.assertNotIn("phone-0", self.d.clip_seen)
 
+    async def test_turned_on_by_hand_what_the_computer_copied_before_stays_here(self):
+        s, line = self.phone()
+        await s.handle({"t": "clip_sync", "on": True})
+        await self.step()
+        await s.handle({"t": "clip_sync", "on": False})
+        self.board = "a password copied while sync was off"
+        await self.step()
+        await s.handle({"t": "clip_sync", "on": True, "fresh": True})
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        self.board = "copied after it was turned on"
+        await self.step()
+        self.assertEqual(line.clips(), ["copied after it was turned on"])
+        await self.leave(s)
+
+    async def test_turned_on_by_hand_on_a_later_visit_starts_from_now_too(self):
+        s, _ = self.phone()
+        await s.handle({"t": "clip_sync", "on": True})
+        await self.step()
+        await self.leave(s)
+        self.board = "copied during a visit with sync off"
+        again, line = self.phone()
+        await again.handle({"t": "clip_sync", "on": True, "fresh": True})
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        await self.leave(again)
+
+    async def test_the_phones_copy_landing_while_the_computers_is_read_is_not_sent_back(self):
+        s, line = self.phone()
+        reading = asyncio.Event()
+
+        async def slow(timeout=5):
+            was = self.board
+            reading.set()
+            await asyncio.sleep(0.02)
+            return was
+
+        with mock.patch.object(server.shell, "clip_get", slow):
+            await s.handle({"t": "clip_sync", "on": True})
+            await reading.wait()
+            await s.handle({"t": "clip_set", "text": "from the phone", "quiet": True})
+            await asyncio.sleep(0.03)
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        await self.leave(s)
+
+    async def test_line_ends_that_read_back_plain_are_not_a_new_copy(self):
+        s, line = self.phone()
+        await s.handle({"t": "clip_sync", "on": True})
+        await s.handle({"t": "clip_set", "text": "one\r\ntwo", "quiet": True})
+        self.board = "one\ntwo"   # as Windows' clipboard is read back
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        await self.leave(s)
+
     async def test_turning_it_off_stops_it(self):
         s, line = self.phone()
         await s.handle({"t": "clip_sync", "on": True})

@@ -16,6 +16,7 @@ before it.
 import asyncio
 import ctypes
 import os
+import time
 
 from . import api
 
@@ -136,13 +137,13 @@ class Injector:
         i.mi = api.MOUSEINPUT(dx, dy, data & 0xFFFFFFFF, flags, 0, 0)
         return i
 
-    @staticmethod
-    def _key(vk: int, up: bool, extended: bool = False, scan: int = 0, unicode: bool = False):
+    def _key(self, vk: int, up: bool, extended: bool = False, scan: int = 0, unicode: bool = False):
         flags = (api.KEYEVENTF_KEYUP if up else 0) | (api.KEYEVENTF_EXTENDEDKEY if extended else 0) | (api.KEYEVENTF_UNICODE if unicode else 0)
         if not unicode and not scan:
             # the key's place on the keyboard too, as a real one sends it: programs that read
             # keys below the virtual-key level (the new Notepad's text box) go wrong without
-            scan = api.user32.MapVirtualKeyW(vk, 0) if api.user32 else 0
+            # (by the layout of the program in front, the one the key itself was picked by)
+            scan = api.user32.MapVirtualKeyExW(vk, 0, self._layout()) if api.user32 else 0
         i = api.INPUT(type=api.INPUT_KEYBOARD)
         i.ki = api.KEYBDINPUT(vk, scan, flags, 0, 0)
         return i
@@ -210,7 +211,7 @@ class Injector:
             self._queue.put_nowait(("text", value))
 
     async def _type(self):
-        after_text = 0   # how many characters the text just before this job had
+        after_text, text_done = 0, 0.0   # how many characters the text just before this job had, and when it was typed
         while True:
             job = await self._queue.get()
             try:
@@ -220,8 +221,12 @@ class Injector:
                         # A key straight after text (a shortcut's "type this, then Enter") must
                         # find the text in: the new Notepad takes its letters in a moment after
                         # their keys, and an Enter sent at once lands three letters early.
+                        # (counted from when the text was done: a key pressed by hand a moment
+                        # after a swiped word has waited already)
                         await asyncio.to_thread(self._caught_up)
-                        await asyncio.sleep(KEY_AFTER_BURST if after_text >= BURST else KEY_AFTER_TEXT)
+                        left = (KEY_AFTER_BURST if after_text >= BURST else KEY_AFTER_TEXT) - (time.monotonic() - text_done)
+                        if left > 0:
+                            await asyncio.sleep(left)
                     after_text = 0
                     self._key_now(*job[1:])
                     if job[1] == "enter" and job[3] is None:
@@ -229,7 +234,7 @@ class Injector:
                         await asyncio.sleep(AFTER_ENTER)
                 else:
                     await self._text_now(job[1])
-                    after_text = len(job[1])
+                    after_text, text_done = len(job[1]), time.monotonic()
             except Exception as err:   # one bad key must not end the typing
                 print(f"weave: typing: {err!r}")
             finally:

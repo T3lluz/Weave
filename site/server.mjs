@@ -38,8 +38,13 @@ function send(res, status, headers, body) {
   res.end(body);
 }
 
-createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+async function answer(req, res) {
+  let url;
+  try {
+    url = new URL(req.url, 'http://x');
+  } catch {
+    return send(res, 400, { 'Content-Type': 'text/plain' }, 'Bad request');
+  }
   let path = url.pathname;
   // any case leads here (/Weave, /WEAVE); the pages live at the lower-case one
   if (path.toLowerCase().startsWith(base) && !path.startsWith(base)) {
@@ -65,4 +70,16 @@ createServer(async (req, res) => {
   } catch {
     send(res, 404, { 'Content-Type': 'text/plain' }, 'Not found');
   }
+}
+
+// Whatever a request does, the server stays up: one that throws gets a 500 and the next is served.
+createServer((req, res) => {
+  answer(req, res).catch(() => {
+    try {
+      if (res.headersSent) res.destroy();
+      else send(res, 500, { 'Content-Type': 'text/plain' }, 'Something went wrong');
+    } catch {
+      res.destroy();
+    }
+  });
 }).listen(port, () => console.log(`weave site on :${port}${base}`));

@@ -222,6 +222,7 @@ class LinkSession @Inject constructor(
             if (st != LinkStatus.Online && st != LinkStatus.Reconnecting) _state.update { it.copy(status = LinkStatus.Connecting) }
             var reason: String? = null
             var writer: Thread? = null
+            var own: Socket? = null
             try {
                 val s = connect(cfg)
                 // a path that dies before the welcome is given up on in seconds too
@@ -234,7 +235,8 @@ class LinkSession @Inject constructor(
                         .put("name", Build.MODEL).put("ver", 3).put("net", network())
                         .put("cursor", if (cfg.localPointer) "local" else "laptop"),
                 )
-                read(DataInputStream(s.getInputStream().buffered(1 shl 16)))
+                own = s
+                read(DataInputStream(s.getInputStream().buffered(1 shl 16)), mine)
             } catch (e: SocketTimeoutException) {
                 reason = if (_state.value.status == LinkStatus.Online) "The laptop stopped answering." else e.message
             } catch (e: IOException) {
@@ -244,7 +246,11 @@ class LinkSession @Inject constructor(
                 // Nothing here may escape: an uncaught exception on this thread would take the whole app down.
                 reason = e.message ?: e.javaClass.simpleName
             } finally {
-                closeSocket()
+                // only this connection's socket: the one after it may be open already
+                if (generation == mine) closeSocket() else try {
+                    own?.close()
+                } catch (_: IOException) {
+                }
                 writer?.interrupt()
                 video.release()
                 audio.stop()
@@ -316,7 +322,7 @@ class LinkSession @Inject constructor(
         }
     }
 
-    private fun read(input: DataInputStream) {
+    private fun read(input: DataInputStream, mine: Int) {
         var buffer = ByteArray(1 shl 16)
         while (true) {
             val kind = input.readUnsignedByte()
@@ -325,7 +331,11 @@ class LinkSession @Inject constructor(
             if (size > buffer.size) buffer = ByteArray(size + (size shr 2))
             input.readFully(buffer, 0, size)
             when (kind) {
-                LinkProtocol.JSON -> onMessage(JSONObject(String(buffer, 0, size)))
+                LinkProtocol.JSON -> {
+                    // a message read just as another computer was picked is not that one's to act on
+                    if (generation != mine) throw IOException("Another computer was picked")
+                    onMessage(JSONObject(String(buffer, 0, size)))
+                }
                 LinkProtocol.VIDEO -> if (size > 9) video.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
                 LinkProtocol.AUDIO -> if (size > 9 && _state.value.laptopSound) audio.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
             }
@@ -483,6 +493,9 @@ class LinkSession @Inject constructor(
             "clip" -> {
                 val text = m.optString("text")
                 val sync = m.optBoolean("sync")
+                // The two crossed on the way: the laptop sent its copy before the phone's reached it.
+                // The phone's wins there, so it wins here, or each would end with the other's.
+                if (sync && android.os.SystemClock.uptimeMillis() - clipSentAt < CLIP_CROSSED_MS) return
                 // kept, so the phone's copy of it isn't sent straight back
                 if (sync) clipSynced = text
                 _events.tryEmit(LinkEvent.Clipboard(text, sync))
@@ -629,12 +642,18 @@ class LinkSession @Inject constructor(
     fun media(command: String) = send("""{"t":"media","cmd":"$command"}""")
     fun lock() = send("""{"t":"sys","cmd":"lock"}""")
     fun copyToLaptop(text: String, quiet: Boolean = false) {
-        if (quiet) clipSynced = text
+        if (quiet) {
+            clipSynced = text
+            clipSentAt = android.os.SystemClock.uptimeMillis()
+        }
         sendJson(JSONObject().put("t", "clip_set").put("text", text).put("quiet", quiet))
     }
 
     /** The last text either clipboard had while the two are kept in step: the one not to send again. */
     @Volatile var clipSynced: String? = null
+
+    /** When the phone last sent its own copy over while the two are kept in step. */
+    @Volatile private var clipSentAt = 0L
 
     /** When the phone's clip last looked at was made; see [LinkPrefs.clipSeen]. */
     var clipSeen: Long
@@ -647,7 +666,8 @@ class LinkSession @Inject constructor(
     /** Keeps the two clipboards in step, or stops. */
     fun setClipSync(on: Boolean) {
         prefs.update { it.copy(clipSync = on) }
-        if (CLIP_SYNC in _state.value.caps) send("""{"t":"clip_sync","on":$on}""")
+        // (turned on by hand: only what is copied from here on goes over, on the laptop's side too)
+        if (CLIP_SYNC in _state.value.caps) send("""{"t":"clip_sync","on":$on,"fresh":true}""")
     }
     fun askClipboard() = send("""{"t":"clip_get"}""")
     fun openOnLaptop(url: String) = sendJson(JSONObject().put("t", "open").put("url", url))
@@ -783,6 +803,8 @@ class LinkSession @Inject constructor(
         const val LOCAL_CURSOR = "localcursor"
         /** This tandem sends its clipboard as it changes, for the phone to keep the two in step. */
         const val CLIP_SYNC = "clipsync"
+        /** A copy from the laptop this soon after the phone sent its own was sent before that one landed. */
+        const val CLIP_CROSSED_MS = 400L
         /** This computer has a touchpad of its own for the phone's fingers ("touch"): it reads swipes and pinches itself. */
         const val TOUCHPAD = "touchpad"
     }

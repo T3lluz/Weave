@@ -362,8 +362,10 @@ class Injector:
         self._caps = bool(mine.get("capsLock"))
         key = tuple(str(mine.get(f) or "") for f in ("layout", "variant", "options", "model", "rules")) + (int(mine.get("active_layout_index") or 0),)
         if key != self._layout_key:
-            self._layout_key = key
-            self._strokes = await asyncio.to_thread(strokes_for, *key[:5], group=key[5])
+            # the key is kept only with its table: typing cut off while this is worked out (a
+            # phone dropping) must not leave the old layout's table under the new one's name
+            strokes = await asyncio.to_thread(strokes_for, *key[:5], group=key[5])
+            self._strokes, self._layout_key = strokes, key
 
     def _stroke(self, s: Stroke, shift: bool):
         mods = [m for m, on in ((KEYS["shift"], shift), (KEYS["altgr"], s.altgr)) if on and m not in self._held]

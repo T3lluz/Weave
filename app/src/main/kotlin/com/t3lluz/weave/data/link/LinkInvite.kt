@@ -126,7 +126,9 @@ internal fun mergeFound(listed: List<LinkHost>, found: List<LinkHost>): List<Lin
  * Nothing else ties them. An entry that only shares a name or an address with a known computer
  * could be anybody's (a list of addresses is whatever its sender wrote), and the phone's token
  * for that computer must not go where such an entry points. So the known computer stays as the
- * phone saved it, and that entry is left out rather than shown beside it as a second one.
+ * phone saved it. An entry that shares an address of its own with it (a tailnet one, a name) is
+ * left out rather than shown beside it as a second one; one that shares only a home-network
+ * address is shown, because those repeat from house to house.
  *
  * Returns the known computers left over, and what is shown of the dashboard's list.
  */
@@ -136,7 +138,7 @@ internal fun joinKnown(known: List<LinkHost>, board: List<LinkHost>): Pair<List<
         val k = known.firstOrNull { k -> k.id !in taken && k.board.isNotBlank() && k.board == d.id }
         when {
             k != null -> d.copy(key = k.key, board = k.board).also { taken += k.id }
-            known.any { o -> o.port == d.port && o.addresses.any { it in d.addresses } } -> null
+            known.any { o -> o.port == d.port && o.addresses.any { it in d.addresses && !isLocalNetwork(it) } } -> null
             else -> d
         }
     }

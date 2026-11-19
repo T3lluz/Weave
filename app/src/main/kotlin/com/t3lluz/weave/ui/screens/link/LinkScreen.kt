@@ -213,7 +213,12 @@ fun LinkScreen(
     fun sendNewClip(): Boolean {
         val desc = clips.primaryClipDescription ?: return false
         if (desc.timestamp == session.clipSeen) return false
+        // the first look ever (sync was on before this was kept): what is there stays put
+        val first = session.clipSeen == -1L
         session.clipSeen = desc.timestamp
+        if (first) return false
+        // a password manager marks what it copies: that never leaves the phone by itself
+        if (desc.extras?.getBoolean(CLIP_IS_SENSITIVE) == true) return false
         if (!desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_PLAIN) && !desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_HTML)) return false
         val text = clips.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
         if (text.isEmpty() || text == session.clipSynced) return false
@@ -222,11 +227,20 @@ fun LinkScreen(
     }
     DisposableEffect(syncing, inFront) {
         val listener = android.content.ClipboardManager.OnPrimaryClipChangedListener { sendNewClip() }
-        if (syncing && inFront) {
-            sendNewClip()
-            clips.addPrimaryClipChangedListener(listener)
-        }
+        if (syncing && inFront) clips.addPrimaryClipChangedListener(listener)
         onDispose { clips.removePrimaryClipChangedListener(listener) }
+    }
+    LaunchedEffect(syncing, inFront) {
+        if (!syncing || !inFront) return@LaunchedEffect
+        // The window is told it has the focus a moment before the clipboard lets it read: on
+        // coming back from another app the first look can find nothing there. So a few looks.
+        for (wait in longArrayOf(0, 120, 300, 700)) {
+            delay(wait)
+            if (clips.primaryClipDescription != null) {
+                sendNewClip()
+                break
+            }
+        }
     }
 
     // Looking for laptops while there is none to show; once connected, one look keeps the saved ticket current.
@@ -274,7 +288,7 @@ fun LinkScreen(
                     }
                 }
                 // copied on the laptop while the two are kept in step: here too, without a word
-                // (a clip made here that hasn't gone over yet is the newer one: it goes, and this is dropped)
+                // (when both have copied something new the phone's wins: it goes over, and this is dropped)
                 is LinkEvent.Clipboard -> if (event.sync) {
                     if (!sendNewClip()) clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
                 } else if (event.text.isEmpty()) {
@@ -781,3 +795,6 @@ private fun PairQuestion(invite: com.t3lluz.weave.data.link.LinkInvite, onPair: 
         dismissButton = { PillButton(icon = AppIcons.Close, label = "Not now", accent = TextSecondary, onClick = onDismiss) },
     )
 }
+
+/** [android.content.ClipDescription.EXTRA_IS_SENSITIVE], by its value: the constant itself is API 33. */
+private const val CLIP_IS_SENSITIVE = "android.content.extra.IS_SENSITIVE"

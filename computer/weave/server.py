@@ -93,6 +93,9 @@ PENDING_WAIT = 120
 # shortcut has eight steps at most, each a message), and for how long (eight waits of ten seconds)
 QUIET_MAY = {"launch", "open", "key", "text", "ping"}
 QUIET_STEPS, QUIET_SECONDS = 16, 120
+# and how much it may type in all: what it asked for is typed to the end after its line has
+# closed, so this is what bounds that (the app's own limit is 500 characters a step)
+QUIET_TEXT = 4000
 
 class Session:
     """One phone, connected."""
@@ -107,6 +110,7 @@ class Session:
         # the phone draws the pointer itself, ahead of the picture: the recorders leave it out
         self.quiet = False            # asked for no notice: may only run a shortcut's steps
         self.quiet_steps, self.quiet_since = 0, time.monotonic()
+        self.quiet_text = 0
         self.cut = False              # closed from this end for asking more than a quiet line may
         self.wait_until = 0.0         # while it waits to be let in: when the question runs out
         self.local_cursor = False
@@ -588,7 +592,10 @@ class Session:
         if self.clip_last is None and seen is not None:
             self.clip_last = seen.get(self.key)
         if self.clip_last is None:
-            self._clip_is(await shell.clip_get(timeout=2))
+            there = await shell.clip_get(timeout=2)
+            # (the phone's own copy may have landed while that was read: it stays the last word)
+            if self.clip_last is None:
+                self._clip_is(there)
         while not self.closed:
             await asyncio.sleep(CLIP_EVERY)
             try:
@@ -744,7 +751,10 @@ class Session:
             # else: no picture, no sound, no clipboard, no pointer, and not for long. Anything
             # more than a shortcut is a session, and a session shows its notice.
             self.quiet_steps += t != "ping"
-            if t not in QUIET_MAY or self.quiet_steps > QUIET_STEPS or time.monotonic() - self.quiet_since > QUIET_SECONDS:
+            if t == "text":
+                self.quiet_text += len(str(msg.get("s", "")))
+            if (t not in QUIET_MAY or self.quiet_steps > QUIET_STEPS or self.quiet_text > QUIET_TEXT
+                    or time.monotonic() - self.quiet_since > QUIET_SECONDS):
                 self.cut = True
                 asyncio.create_task(self.close())
                 return
@@ -815,7 +825,9 @@ class Session:
                 self.net = str(msg["net"])[:12]
         elif t == "clip_set":
             text = str(msg.get("text", ""))[:200_000]
-            self._clip_is(text)
+            # kept as it reads back (Windows hands line ends back as plain ones), or it would
+            # look like a new copy and go straight back to the phone
+            self._clip_is(text.replace("\r\n", "\n"))
             await shell.clip_set(text)
             # a copy kept in step by the phone says nothing; one sent on purpose says it landed
             if not msg.get("quiet"):
@@ -824,6 +836,13 @@ class Session:
             if self.clip_task:
                 self.clip_task.cancel()
                 self.clip_task = None
+            if not msg.get("on") or msg.get("fresh"):
+                # Turned off, or just turned on by hand: what the computer has copied until
+                # now stays here. Only a phone coming back with it on catches up.
+                self.clip_last = None
+                seen = getattr(self.daemon, "clip_seen", None)
+                if seen is not None:
+                    seen.pop(self.key, None)
             if msg.get("on"):
                 self.clip_task = asyncio.create_task(self._sync_clipboard())
         elif t == "clip_get":
@@ -1063,7 +1082,12 @@ class Daemon:
         if old and self.injector:
             # all of the injector's held buttons: there is one phone in this house; with two, one
             # coming back would also let go of the other's drag
-            self.injector.release_all()
+            if all(getattr(s, "quiet", False) and not getattr(s, "cut", False) for s in old):
+                # only a shortcut from the home screen still on its way: opening the remote
+                # meanwhile lets it finish what it is typing
+                self.injector.release_all(finish=True)
+            else:
+                self.injector.release_all()
         for s in old:
             self.sessions.discard(s)
             s.replaced = True
