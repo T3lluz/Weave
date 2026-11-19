@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -212,6 +213,9 @@ internal fun LinkTrackpad(
 ) {
     val session = viewModel.session
     val haptics = rememberHaptics()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // the pad's surface under the finger: a faint, uneven grain while it glides
+    val paper = remember(context) { com.t3lluz.weave.ui.util.PaperFeel(context) }
     val reduced = rememberReducedMotion()
     val room = roomColor(LinkHandsTone)
     val shape = RoundedCornerShape(28.dp)
@@ -237,6 +241,9 @@ internal fun LinkTrackpad(
         Box(
             Modifier
                 .matchParentSize()
+                // A swipe that starts at the pad's edge is the pad's, not Android's "back". (The
+                // system honours this for the lower 200 dp of each side of the screen.)
+                .systemGestureExclusion()
                 .clip(shape)
                 .then(if (reduced) Modifier else Modifier.clothDent(dents))
                 .background(room)
@@ -273,7 +280,9 @@ internal fun LinkTrackpad(
                 .trackpad(
                     session, config.speed, config.naturalScroll,
                     onTick = haptics::tick, onHold = haptics::click, onTouched = { viewModel.touched = true },
+                    onGlide = paper::glide,
                     onFingers = { fingers ->
+                        if (fingers.isEmpty()) paper.lift()
                         follow(dents, fingers)
                         if (anyFinger != fingers.isNotEmpty()) onTouch(fingers.isNotEmpty())
                         anyFinger = fingers.isNotEmpty()

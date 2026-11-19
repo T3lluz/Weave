@@ -129,3 +129,86 @@ fun rememberHaptics(): HapticHelper {
 
 
 
+/**
+ * When a finger gliding over a surface would feel its grain: one faint tick every few dp of
+ * travel, each a little nearer or further and a little fainter or firmer than the last, so it
+ * reads as a texture and not as a buzz. Never more often than the motor can keep apart.
+ *
+ * [chance] gives numbers from 0 to 1, [now] the time in ms; both are handed in so this can be
+ * tested without a phone.
+ */
+class Grain(
+    private val everyDp: Float = 3.4f,
+    private val strength: Float = 0.13f,
+    private val minGapMs: Long = 14,
+    private val chance: () -> Float = { kotlin.random.Random.nextFloat() },
+    private val now: () -> Long = { android.os.SystemClock.uptimeMillis() },
+) {
+    private var toNext = everyDp
+    private var lastAt = 0L
+
+    /** The finger went [dp] further: how firm a tick is due (0..1), or null when none is. */
+    fun glide(dp: Float): Float? {
+        if (dp <= 0f) return null
+        toNext -= dp
+        if (toNext > 0f) return null
+        toNext = everyDp * (0.55f + 0.9f * chance())
+        val at = now()
+        // a fast stroke would ask for hundreds a second: past this they run together, so they are thinned
+        if (at - lastAt < minGapMs) return null
+        lastAt = at
+        return strength * (0.6f + 0.8f * chance())
+    }
+
+    /** The finger lifted: the next stroke starts its grain afresh. */
+    fun lift() {
+        toNext = everyDp
+    }
+}
+
+/**
+ * Paper under the finger: the trackpad's surface, felt. A phone whose motor can play the faint
+ * tick this is made of (Pixels can) gets it; any other gets nothing, since a plain buzz is not
+ * what paper feels like. It is touch feedback to the system, so turning that off in the phone's
+ * settings turns this off too.
+ */
+class PaperFeel(context: android.content.Context) {
+    private val vibrator: android.os.Vibrator? =
+        if (Build.VERSION.SDK_INT >= 31) {
+            (context.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+        } else {
+            null
+        }
+    private val can = Build.VERSION.SDK_INT >= 31 &&
+        vibrator?.areAllPrimitivesSupported(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK) == true
+    private val grain = Grain()
+
+    fun glide(dp: Float) {
+        if (!can) return
+        val firm = grain.glide(dp) ?: return
+        play(firm)
+    }
+
+    fun lift() = grain.lift()
+
+    @androidx.annotation.RequiresApi(31)
+    private fun effect(firm: Float) = android.os.VibrationEffect.startComposition()
+        .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, firm.coerceIn(0.01f, 1f)).compose()
+
+    private fun play(firm: Float) {
+        val v = vibrator ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                v.vibrate(effect(firm), android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
+            } else if (Build.VERSION.SDK_INT >= 31) {
+                @Suppress("DEPRECATION")
+                v.vibrate(
+                    effect(firm),
+                    android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).build(),
+                )
+            }
+        } catch (_: RuntimeException) {
+            // a motor that refuses is not worth a crash
+        }
+    }
+}

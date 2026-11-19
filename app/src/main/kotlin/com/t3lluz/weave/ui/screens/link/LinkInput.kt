@@ -82,6 +82,8 @@ fun Modifier.trackpad(
     nativePad: Boolean = false,
     /** Two fingers flicked sideways pressed back (true) or forward: only where the phone does that itself. */
     onSweep: (back: Boolean) -> Unit = {},
+    /** A finger (or the fingers together) went this many dp further over the pad: for its paper feel. */
+    onGlide: (Float) -> Unit = {},
 ): Modifier = pointerInput(session, speed, naturalScroll, nativePad) {
     val slop = viewConfiguration.touchSlop
     val notch = DP_PER_NOTCH * density
@@ -159,6 +161,7 @@ fun Modifier.trackpad(
                             // slow strokes stay precise, fast ones cross the screen
                             val gain = speed * (0.75f + 1.5f * dpPerMs.coerceAtMost(2.5f))
                             session.move(delta.x / density * gain, delta.y / density * gain)
+                            onGlide(hypot(delta.x, delta.y) / density)
                         }
                     } else if (pressed.size >= 2) {
                         var sum = Offset.Zero
@@ -168,6 +171,7 @@ fun Modifier.trackpad(
                         if (!scrolled && hypot(scrollTravel.x, scrollTravel.y) > slop) scrolled = true
                         // Any one finger leaving its place counts, not only all of them going the
                         // same way: in a pinch the fingers part and their middle stays put.
+                        if (scrolled) onGlide(hypot(delta.x, delta.y) / density)
                         if (!strayed && pressed.any { (it.position - landed.getValue(it.id.value)).getDistance() > slop }) {
                             strayed = true
                             scrolled = true

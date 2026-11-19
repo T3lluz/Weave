@@ -156,10 +156,21 @@ fun LinkScreen(
     var raisedForField by remember { mutableStateOf(false) }
     val geometry = remember { PreviewGeometry() }
 
+    // While the remote is up, Android's back does not leave it: a swipe in from the side belongs to
+    // the trackpad, and one that the system takes anyway must not end the session. The arrow in the
+    // corner is the way out; back says so, once in a while.
+    var backSaidAt by remember { mutableStateOf(0L) }
     BackHandler {
         when {
             arranging -> arranging = false
             landscape && viewModel.orientation == 1 -> viewModel.orientation = 2
+            online -> {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - backSaidAt > BACK_SAYS_EVERY_MS) {
+                    backSaidAt = now
+                    toast = "Back is off while the remote is up. The arrow at the top leaves."
+                }
+            }
             else -> onNavigateBack()
         }
     }
@@ -840,6 +851,9 @@ private fun AlreadyPaired(name: String, connected: Boolean, onConnect: () -> Uni
         dismissButton = { if (!connected) PillButton(icon = AppIcons.Close, label = "Not now", accent = TextSecondary, onClick = onDismiss) },
     )
 }
+
+/** How often at most a swallowed back says where the way out is. */
+private const val BACK_SAYS_EVERY_MS = 20_000L
 
 /** [android.content.ClipDescription.EXTRA_IS_SENSITIVE], by its value: the constant itself is API 33. */
 private const val CLIP_IS_SENSITIVE = "android.content.extra.IS_SENSITIVE"
