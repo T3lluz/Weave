@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from weave import server
+from weave.shell import clip_sendable as linux_clip_sendable   # the real one: the tests below stand in for it
 
 
 class Line:
@@ -42,10 +43,12 @@ class InStep(unittest.IsolatedAsyncioTestCase):
 
         self.private = False
 
-        async def clip_private():
-            return self.private
+        async def clip_sendable(text):
+            if self.private == "broken":
+                raise OSError("the clipboard can't be read")
+            return not self.private
 
-        for name, fake in (("clip_get", clip_get), ("clip_set", clip_set), ("clip_private", clip_private)):
+        for name, fake in (("clip_get", clip_get), ("clip_set", clip_set), ("clip_sendable", clip_sendable)):
             patch = mock.patch.object(server.shell, name, fake)
             patch.start()
             self.addCleanup(patch.stop)
@@ -218,6 +221,35 @@ class InStep(unittest.IsolatedAsyncioTestCase):
         await self.step()
         self.assertEqual(line.clips(), ["an ordinary copy"])
         await self.leave(s)
+
+    async def test_a_clip_whose_marks_cant_be_read_is_not_sent(self):
+        s, line = self.phone()
+        await s.handle({"t": "clip_sync", "on": True})
+        await self.step()
+        self.board, self.private = "maybe a password", "broken"
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        self.private = False
+        await self.step()
+        self.assertEqual(line.clips(), ["maybe a password"], "it goes once it can be told that it may")
+        await self.leave(s)
+
+    async def test_on_linux_the_clip_must_be_the_same_and_unmarked_before_and_after(self):
+        from weave import shell
+        answers = []
+
+        async def run(*args, **_):
+            return answers.pop(0)
+
+        with mock.patch.object(shell, "run", run):
+            answers[:] = ["text/plain\n", "hello", "text/plain\n"]
+            self.assertTrue(await linux_clip_sendable("hello"))
+            answers[:] = ["text/plain\nx-kde-passwordManagerHint\n", "hunter2", ""]
+            self.assertFalse(await linux_clip_sendable("hunter2"), "marked when first looked at, cleared since")
+            answers[:] = ["text/plain\n", "hunter2", "text/plain\nx-kde-passwordManagerHint\n"]
+            self.assertFalse(await linux_clip_sendable("hello"), "another clip took its place meanwhile")
+            answers[:] = ["", "hello", ""]
+            self.assertFalse(await linux_clip_sendable("hello"), "the types could not be read")
 
     def test_the_mark_a_password_manager_leaves(self):
         from weave import shell

@@ -771,6 +771,7 @@ class FingersOnThePad(unittest.TestCase):
         pad.lift()
         self.sent.clear()
         pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)], turned=True)
+        pad._began -= 1   # well past the moment a lift would read as a tap
         pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0), (3, 60.0, 40.0)], turned=True)
         ids = [v for frame in self.sent for t, c, v in frame if c == inject.ABS_MT_TRACKING_ID]
         self.assertEqual(ids.count(-1), 2, "the two turned fingers are lifted")
@@ -838,7 +839,21 @@ class FingersInBunches(unittest.IsolatedAsyncioTestCase):
         landed = [v for t, c, v in self.sent[0][1] if c == inject.ABS_MT_POSITION_X]
         self.assertEqual(xs[0] - landed[0], 3 * inject.PAD_UNITS_PER_MM, "where the fingers are now, not a step on the way")
 
-    async def test_a_finger_lifting_is_never_held_back_and_what_waited_is_dropped(self):
+    async def test_the_end_of_a_stroke_is_written_before_the_fingers_lift(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        pad.frame([(1, 25.0, 40.0), (2, 45.0, 40.0)])
+        pad.frame(())      # as the phone says it: the fingers are up
+        self.assertEqual(len(self.sent), 1, "both wait their turn")
+        await asyncio.sleep(inject.PAD_PACE * 3)
+        self.assertEqual(len(self.sent), 3, "where the fingers got to, then up")
+        moved = [v for t, c, v in self.sent[1][1] if c == inject.ABS_MT_POSITION_X]
+        landed = [v for t, c, v in self.sent[0][1] if c == inject.ABS_MT_POSITION_X]
+        self.assertEqual(moved[0] - landed[0], 5 * inject.PAD_UNITS_PER_MM)
+        self.assertEqual([v for t, c, v in self.sent[2][1] if c == inject.ABS_MT_TRACKING_ID], [-1, -1])
+        self.assertFalse(pad.touched)
+
+    async def test_a_phone_that_is_gone_lifts_the_fingers_at_once(self):
         inject, pad = self.pad()
         pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
         pad.frame([(1, 25.0, 40.0), (2, 45.0, 40.0)])
@@ -847,6 +862,22 @@ class FingersInBunches(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(pad.touched)
         await asyncio.sleep(inject.PAD_PACE * 3)
         self.assertEqual(len(self.sent), 2, "nothing is written after the fingers are up")
+
+    async def test_a_turned_touch_is_not_started_over_in_its_first_moment(self):
+        inject, pad = self.pad()
+        with mock.patch.object(inject, "PAD_TAP", 0.05):
+            pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)], turned=True)
+            await asyncio.sleep(inject.PAD_PACE * 2)
+            pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0), (3, 60.0, 40.0)], turned=True)
+            await asyncio.sleep(inject.PAD_PACE * 2)
+            ids = [v for _, frame in self.sent for t, c, v in frame if c == inject.ABS_MT_TRACKING_ID]
+            self.assertNotIn(-1, ids, "two fingers down and up this fast would be a tap: the third waits")
+            self.assertEqual(len(pad._slots), 2)
+            await asyncio.sleep(0.06)
+            pad.frame([(1, 21.0, 40.0), (2, 41.0, 40.0), (3, 61.0, 40.0)], turned=True)
+            await asyncio.sleep(inject.PAD_PACE * 2)
+            self.assertEqual(len(pad._slots), 3, "after that the touch starts over with all three")
+        pad.lift()
 
 
 class Typing(unittest.IsolatedAsyncioTestCase):
@@ -902,8 +933,11 @@ class Clipboard(Harness):
         async def copy(text):
             board["text"] = text
 
+        async def sendable(text):
+            return True
+
         with mock.patch.object(server.shell, "clip_get", paste), mock.patch.object(server.shell, "clip_set", copy), \
-                mock.patch.object(server, "CLIP_EVERY", 0.01):
+                mock.patch.object(server.shell, "clip_sendable", sendable), mock.patch.object(server, "CLIP_EVERY", 0.01):
             await self.s.handle({"t": "clip_sync", "on": True})
             await asyncio.sleep(0.05)
             # what was there already stays put

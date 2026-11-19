@@ -43,6 +43,9 @@ PAD_MM, PAD_UNITS_PER_MM, PAD_FINGERS = 240, 20, 5
 # libinput like a finger that jumped, and it throws the movement away. A real pad reports every
 # 7 to 12 ms.
 PAD_PACE = 0.008
+# libinput takes two fingers that land and lift within this long, barely moving, for a tap (the
+# right button): a touch is not started over inside it
+PAD_TAP = 0.25
 
 # Linux key codes by the name the phone sends. Letters and digits sit where QWERTY has them,
 # which holds for the Nordic layouts too, so ctrl+c is ctrl+c.
@@ -154,7 +157,9 @@ class Touchpad:
         self._first = None
         self._wrote = 0.0          # when the last frame went to the kernel
         self._waiting = None       # the newest fingers held back for the pace, and the timer that writes them
+        self._lift_after = False   # the fingers lifted while a frame was held back: they lift right behind it
         self._timer = None
+        self._began = 0.0          # when this touch's first finger was laid
 
     @property
     def touched(self) -> bool:
@@ -168,44 +173,60 @@ class Touchpad:
         # read whole before anything changes: a frame that makes no sense must not be half laid
         fingers = {int(n): (float(x), float(y)) for n, x, y in list(fingers)[:PAD_FINGERS]}
         fingers = {n: at for n, at in fingers.items() if math.isfinite(at[0]) and math.isfinite(at[1])}
-        # The same fingers again, too soon after the last frame: kept, and written when its time
-        # comes (only the newest: what lay between is on the way there). A finger landing or
-        # lifting is never held back.
+        # Too soon after the last frame: kept, and written when its time comes (only the newest
+        # places: what lay between is on the way there). The fingers lifting waits for what is
+        # kept to be written first, so the end of a stroke, which is what a program measures a
+        # flick by, is not lost; it goes right behind it.
         left = PAD_PACE - (time.monotonic() - self._wrote)
-        if fingers and set(fingers) == set(self._slots) and left > 0:
+        if left > 0 and (fingers or self._waiting):
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = None
             if loop:
-                self._waiting = (fingers, turned)
+                if fingers:
+                    self._waiting, self._lift_after = (fingers, turned), False
+                else:
+                    self._lift_after = True
                 if not self._timer:
                     self._timer = loop.call_later(left, self._late)
                 return
-        self._waiting = None
+        self._forget_waiting()
+        self._lay(fingers, turned)
+
+    def _forget_waiting(self):
+        self._waiting, self._lift_after = None, False
         if self._timer:
             self._timer.cancel()
             self._timer = None
-        self._lay(fingers, turned)
 
     def _late(self):
         self._timer = None
-        waiting, self._waiting = self._waiting, None
+        waiting, lift = self._waiting, self._lift_after
+        self._waiting, self._lift_after = None, False
         if waiting:
             self._lay(*waiting)
+        if lift:
+            self._lay({}, False)
 
     def _lay(self, fingers: dict, turned: bool):
         if self._slots and self._turned and len(fingers) > 2:
             # A third finger joins two that were laid turned round. Turning is for scrolling
             # only: the desktop's own three- and four-finger swipes go one way whatever
-            # scrolling is set to. So the touch starts over, the right way round.
-            self._lay({}, False)
+            # scrolling is set to. So the touch starts over, the right way round. Not in its
+            # first moment, though: two fingers down and up that fast are a tap to libinput.
+            # Until then the third finger is left off.
+            if time.monotonic() - self._began < PAD_TAP:
+                fingers = {n: at for n, at in fingers.items() if n in self._slots}
+            else:
+                self._lay({}, False)
         if not self._slots:
             if not fingers:
                 return
             # a new touch: its middle goes on the pad's middle
             self._origin = (sum(x for x, _ in fingers.values()) / len(fingers), sum(y for _, y in fingers.values()) / len(fingers))
             self._turned = turned and len(fingers) <= 2
+            self._began = time.monotonic()
         events = []
         before = len(self._slots)
         for number in [n for n in self._slots if n not in fingers]:
@@ -247,7 +268,9 @@ class Touchpad:
             self._wrote = time.monotonic()
 
     def lift(self):
-        self.frame(())
+        """Up at once, whatever was still waiting to be written: for a phone that is gone."""
+        self._forget_waiting()
+        self._lay({}, False)
 
     def close(self):
         self.lift()

@@ -65,34 +65,50 @@ def _clip_set(text: str):
         api.user32.CloseClipboard()
 
 
-def _clip_private() -> bool:
-    """Password managers mark what they copy for Windows' own clipboard history and cloud
-    clipboard to leave alone: one format whose presence says so, two whose value 0 does."""
+def _clip_sendable(text: str) -> bool:
+    """Whether [text], just read off the clipboard, may go to the phone by itself. Password
+    managers mark what they copy for Windows' own clipboard history and cloud clipboard to leave
+    alone: one format whose presence says so, two whose value 0 does. The text is read again
+    with the clipboard held open, so the marks are those of this very clip; a clipboard that
+    can't be opened (another program has it) says no, and the clip waits for the next look."""
     if not _open_clipboard():
         return False
     try:
-        if api.user32.IsClipboardFormatAvailable(api.user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")):
-            return True
-        for name in ("CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"):
-            handle = api.user32.GetClipboardData(api.user32.RegisterClipboardFormatW(name))
-            if not handle:
-                continue
-            at = api.kernel32.GlobalLock(handle)
-            if not at:
-                continue
-            try:
-                if ctypes.c_uint32.from_address(at).value == 0:
-                    return True
-            finally:
-                api.kernel32.GlobalUnlock(handle)
-        return False
+        handle = api.user32.GetClipboardData(CF_UNICODETEXT)
+        at = api.kernel32.GlobalLock(handle) if handle else None
+        if not at:
+            return False
+        try:
+            if ctypes.wstring_at(at).replace("\r\n", "\n") != text:
+                return False
+        finally:
+            api.kernel32.GlobalUnlock(handle)
+        return not _marked_private()
     finally:
         api.user32.CloseClipboard()
 
 
-async def clip_private() -> bool:
-    """Whether what is copied now is marked as a secret: that is never sent to the phone by itself."""
-    return await asyncio.to_thread(_clip_private)
+def _marked_private() -> bool:
+    """With the clipboard open: whether a password manager marked what is on it."""
+    if api.user32.IsClipboardFormatAvailable(api.user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")):
+        return True
+    for name in ("CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"):
+        handle = api.user32.GetClipboardData(api.user32.RegisterClipboardFormatW(name))
+        if not handle:
+            continue
+        at = api.kernel32.GlobalLock(handle)
+        if not at:
+            continue
+        try:
+            if ctypes.c_uint32.from_address(at).value == 0:
+                return True
+        finally:
+            api.kernel32.GlobalUnlock(handle)
+    return False
+
+
+async def clip_sendable(text: str) -> bool:
+    return await asyncio.to_thread(_clip_sendable, text)
 
 
 async def clip_get(timeout: float = 5) -> str:

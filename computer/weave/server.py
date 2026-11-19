@@ -616,14 +616,14 @@ class Session:
             if text and _plain(text) != _plain(self.clip_last or ""):
                 # what a password manager copied stays on this computer: it is not sent, and
                 # not kept as seen either, so it is looked at again (and passed over) until
-                # something else is copied
+                # something else is copied. A clip whose marks can't be read waits too.
                 try:
-                    if await shell.clip_private():
+                    if not await shell.clip_sendable(text):
                         continue
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    pass
+                    continue
                 self._clip_is(text)
                 self.send_json({"t": "clip", "text": text[:200_000], "sync": True})
 

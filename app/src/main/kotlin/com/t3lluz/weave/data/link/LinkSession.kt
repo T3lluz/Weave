@@ -181,9 +181,16 @@ class LinkSession @Inject constructor(
      * gets a new one, so what is meant for the computer picked now can never be written to the
      * one picked before, whose thread may still be working through its addresses.
      */
-    private class Line(val generation: Int) {
+    private class Line(val generation: Int, /** The key of the computer it is to. */ val key: String) {
         @Volatile var socket: Socket? = null
         val outbox = LinkedBlockingQueue<ByteArray>()
+
+        /**
+         * Connected, with its hello first in the queue: only from here is anything else taken.
+         * What is sent while an address is still being waited on (a ping, a finger on the pad)
+         * is old by the time it could go, and a computer hangs up on a first word that isn't hello.
+         */
+        @Volatile var open = false
     }
 
     /** The connection of the computer picked now; what is sent goes to this one only. */
@@ -240,7 +247,16 @@ class LinkSession @Inject constructor(
             var reason: String? = null
             var writer: Thread? = null
             // this try's own connection; it becomes the one to send to only while this is still the computer picked
-            val ln = Line(mine)
+            val ln = Line(mine, cfg.key)
+            // The hello is the first thing in this connection's own queue, before anything else can
+            // be put there: its token is this computer's and no other's.
+            ln.outbox.offer(
+                frame(
+                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.key)).put("ticket", cfg.ticket)
+                        .put("name", Build.MODEL).put("ver", 3).put("net", network())
+                        .put("cursor", if (cfg.localPointer) "local" else "laptop").toString(),
+                ),
+            )
             synchronized(lines) {
                 if (generation != mine) return
                 line = ln
@@ -250,15 +266,8 @@ class LinkSession @Inject constructor(
                 // a path that dies before the welcome is given up on in seconds too
                 s.soTimeout = READ_TIMEOUT_MS
                 val out = s.getOutputStream()
+                ln.open = true
                 writer = Thread({ write(out, ln.outbox) }, "link-out").apply { isDaemon = true; start() }
-                // the hello goes on this connection's own queue: its token is this computer's and no other's
-                ln.outbox.offer(
-                    frame(
-                        JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.key)).put("ticket", cfg.ticket)
-                            .put("name", Build.MODEL).put("ver", 3).put("net", network())
-                            .put("cursor", if (cfg.localPointer) "local" else "laptop").toString(),
-                    ),
-                )
                 read(DataInputStream(s.getInputStream().buffered(1 shl 16)), mine)
             } catch (e: SocketTimeoutException) {
                 reason = if (_state.value.status == LinkStatus.Online) "The laptop stopped answering." else e.message
@@ -273,8 +282,12 @@ class LinkSession @Inject constructor(
                 synchronized(lines) { if (line === ln) line = null }
                 close(ln)
                 writer?.interrupt()
-                video.release()
-                audio.stop()
+                // the picture and the sound are the session's: a try that ended after another
+                // computer was picked must not take that one's away
+                if (generation == mine) {
+                    video.release()
+                    audio.stop()
+                }
             }
             if (!wanted || generation != mine) return
             if (_state.value.status == LinkStatus.Denied) {
@@ -316,6 +329,8 @@ class LinkSession @Inject constructor(
             val s = Socket()
             ln.socket = s
             try {
+                // (stop() closes the socket it finds: one put there just after it looked is closed here)
+                if (generation != ln.generation) throw IOException("Another computer was picked")
                 s.tcpNoDelay = true
                 s.keepAlive = true
                 // over mobile data the tailnet's first packet can take a few seconds to find its way
@@ -453,6 +468,8 @@ class LinkSession @Inject constructor(
                     val mac = w.optString("mac")
                     if (mac.isNotBlank()) prefs.update { it.copy(wakeMac = mac, wakeBroadcast = w.optString("brd").takeIf { b -> b != "null" }.orEmpty()) }
                 }
+                // (a welcome read just as another computer was picked is not that one's: nothing of it is kept)
+                if (line?.key != prefs.config.value.key) return
                 // its own id, for knowing it again when a code for it is scanned
                 m.optString("id").take(64).let { id -> if (id.isNotBlank()) prefs.update { it.copy(ident = id) } }
                 // let in: this computer is one of the phone's own from now on, listed without a dashboard
@@ -617,10 +634,11 @@ class LinkSession @Inject constructor(
 
     // ── out ──
 
-    private fun send(json: String) {
-        val ln = line ?: return
-        if (ln.socket == null) return
-        ln.outbox.offer(frame(json))
+    /** Whether it went on its way: not while there is no connection, or one still being made. */
+    private fun send(json: String): Boolean {
+        val ln = line ?: return false
+        if (!ln.open) return false
+        return ln.outbox.offer(frame(json))
     }
 
     private fun frame(json: String): ByteArray {
@@ -677,12 +695,14 @@ class LinkSession @Inject constructor(
     fun text(value: String) = sendJson(JSONObject().put("t", "text").put("s", value))
     fun media(command: String) = send("""{"t":"media","cmd":"$command"}""")
     fun lock() = send("""{"t":"sys","cmd":"lock"}""")
-    fun copyToLaptop(text: String, quiet: Boolean = false) {
+    /** Whether it went: false between two tries at connecting, when it has to be sent again later. */
+    fun copyToLaptop(text: String, quiet: Boolean = false): Boolean {
+        if (!send(JSONObject().put("t", "clip_set").put("text", text).put("quiet", quiet).toString())) return false
         if (quiet) {
             clipSynced = text
             clipSentAt = android.os.SystemClock.uptimeMillis()
         }
-        sendJson(JSONObject().put("t", "clip_set").put("text", text).put("quiet", quiet))
+        return true
     }
 
     /** The last text either clipboard had while the two are kept in step: the one not to send again. */

@@ -215,14 +215,18 @@ fun LinkScreen(
         if (desc.timestamp == session.clipSeen) return false
         // the first look ever (sync was on before this was kept): what is there stays put
         val first = session.clipSeen == -1L
+        val skip = first ||
+            // a password manager marks what it copies: that never leaves the phone by itself
+            desc.extras?.getBoolean(CLIP_IS_SENSITIVE) == true ||
+            (!desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_PLAIN) && !desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_HTML))
+        val text = if (skip) "" else clips.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        if (text.isEmpty() || text == session.clipSynced) {
+            session.clipSeen = desc.timestamp
+            return false
+        }
+        // looked at only once it has gone: between two tries at connecting it is kept for the next look
+        if (!session.copyToLaptop(text, quiet = true)) return false
         session.clipSeen = desc.timestamp
-        if (first) return false
-        // a password manager marks what it copies: that never leaves the phone by itself
-        if (desc.extras?.getBoolean(CLIP_IS_SENSITIVE) == true) return false
-        if (!desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_PLAIN) && !desc.hasMimeType(android.content.ClipDescription.MIMETYPE_TEXT_HTML)) return false
-        val text = clips.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
-        if (text.isEmpty() || text == session.clipSynced) return false
-        session.copyToLaptop(text, quiet = true)
         return true
     }
     DisposableEffect(syncing, inFront) {
@@ -230,7 +234,8 @@ fun LinkScreen(
         if (syncing && inFront) clips.addPrimaryClipChangedListener(listener)
         onDispose { clips.removePrimaryClipChangedListener(listener) }
     }
-    LaunchedEffect(syncing, inFront) {
+    // (and again when the link is back up: a clip that couldn't go while it was down goes then)
+    LaunchedEffect(syncing, inFront, state.status == LinkStatus.Online) {
         if (!syncing || !inFront) return@LaunchedEffect
         // The window is told it has the focus a moment before the clipboard lets it read: on
         // coming back from another app the first look can find nothing there. So a few looks.

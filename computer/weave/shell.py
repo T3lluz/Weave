@@ -32,9 +32,17 @@ def marked_private(types: str) -> bool:
     return any(line.strip() == "x-kde-passwordManagerHint" for line in types.splitlines())
 
 
-async def clip_private() -> bool:
-    """Whether what is copied now is marked as a secret: that is never sent to the phone by itself."""
-    return marked_private(await run("wl-paste", "-l", timeout=2))
+async def clip_sendable(text: str) -> bool:
+    """Whether [text], just read off the clipboard, may go to the phone by itself: not when a
+    password manager marked it, and not when that can't be told. The types are read, then the
+    text again, then the types again: the clip must be the same one all the way through and
+    unmarked both times, or it waits for the next look (a second later)."""
+    before = await run("wl-paste", "-l", timeout=2)
+    again = await run("wl-paste", "-n", "-t", "text", timeout=2)
+    after = await run("wl-paste", "-l", timeout=2)
+    if not before.strip() or not after.strip() or again != text:
+        return False
+    return not marked_private(before) and not marked_private(after)
 
 
 def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):

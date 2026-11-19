@@ -10,6 +10,7 @@ _QUIET = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
 
 async def run(*args, stdin: bytes | None = None, timeout: float = 5) -> str:
     """What the program printed, or nothing when it isn't there, failed to start or took too long."""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *args, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
@@ -18,3 +19,11 @@ async def run(*args, stdin: bytes | None = None, timeout: float = 5) -> str:
         return out.decode(errors="replace")
     except (OSError, asyncio.TimeoutError):
         return ""
+    finally:
+        # one that took too long (or whose wait was called off) is not left running: asked
+        # again every second, a program that hangs would pile up
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
