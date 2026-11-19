@@ -74,34 +74,120 @@ import org.intellij.lang.annotations.Language
 @Language("AGSL")
 private const val CLOTH_DENT_AGSL = """
     uniform shader content;
-    uniform float2 uTouch;
-    uniform float uDepth;
+    uniform float2 uTouch0;
+    uniform float2 uTouch1;
+    uniform float2 uTouch2;
+    uniform float3 uDepth;
+    uniform float uPull;
     uniform float uRadius;
     uniform float2 uSize;
     uniform float uEdge;
 
+    // How much of one finger's dent reaches p: 1 under the finger, fading out round it.
+    float reach(float2 p, float2 touch) {
+        float x = length(p - touch) / uRadius;
+        return exp(-x * x);
+    }
+
+    // How much darker one dent's wall makes the cloth at p. Lit from straight above, the walls
+    // are a little darker than the flat cloth, most where they are steepest, so the shading
+    // rings the finger evenly. Only while pressed in: springing back past flat must not
+    // brighten the cloth.
+    float wall(float2 p, float2 touch, float depth, float edge) {
+        float x = length(p - touch) / uRadius;
+        return 0.12 * max(depth, 0.0) * x * exp(-x * x) * 2.33 * edge;
+    }
+
     half4 main(float2 p) {
-        float2 d = p - uTouch;
-        float x = length(d) / uRadius;
-        float f = exp(-x * x);
         // the frame holds the cloth: the pull fades out toward the pad's edges, which stay put
         float edge = clamp(min(min(p.x, uSize.x - p.x), min(p.y, uSize.y - p.y)) / uEdge, 0.0, 1.0);
-        // the cloth is pulled into the dent: each point shows what lay further out, so the
-        // weave stretches toward the finger (never folding over: the pull stays under 2.2)
-        float2 src = uTouch + d * (1.0 + 1.25 * uDepth * f * edge);
-        src = clamp(src, float2(0.5), uSize - 0.5);
-        half4 c = content.eval(src);
-        // lit from straight above, the dent's walls are a little darker than the flat cloth,
-        // most where they are steepest, so the shading rings the finger evenly
-        float slope = x * f * 2.33;
-        // shade only while pressed in: springing back past flat must not brighten the cloth
-        c.rgb *= 1.0 - 0.12 * max(uDepth, 0.0) * slope * edge;
-        return c;
+        // one dent under each finger; a finger that isn't there has no depth and adds nothing
+        float3 f = float3(reach(p, uTouch0), reach(p, uTouch1), reach(p, uTouch2));
+        // Where two dents meet they share the cloth: the pull of all of them together is scaled
+        // by how much one of them has the place to itself (1 under a finger, a half midway
+        // between two). Added up plainly, the cloth between two fingers is pulled past itself
+        // and the weave folds into streaks. uPull is eased down as well while fingers crowd
+        // each other (crowding, below): with both, the cloth is never squeezed tighter between
+        // two fingers than round one.
+        float3 g = f * abs(uDepth);
+        float all = g.x + g.y + g.z + 0.0001;
+        float own = dot(g, g) / (all * all);
+        float3 pull = uPull * own * uDepth * f * edge;
+        // the cloth is pulled into the dents: each point shows what lay further out, so the
+        // weave stretches toward the fingers
+        float2 src = p + (p - uTouch0) * pull.x + (p - uTouch1) * pull.y + (p - uTouch2) * pull.z;
+        half4 color = content.eval(clamp(src, float2(0.5), uSize - 0.5));
+        color.rgb *= (1.0 - wall(p, uTouch0, uDepth.x, edge)) * (1.0 - wall(p, uTouch1, uDepth.y, edge)) * (1.0 - wall(p, uTouch2, uDepth.z, edge));
+        return color;
     }
 """
 
+/** How many fingers dent the cloth at once: two scroll, three are the middle button. */
+private const val DENTS = 3
+
+/** How far the cloth is drawn into a dent: 1.25 times its own distance from the finger, at the finger. */
+private const val PULL = 1.25f
+
+/** How much of that pull is taken off while two fingers crowd each other. */
+private const val CROWDED_EASE = 0.42f
+
+/**
+ * How much two fingers crowd each other, 0 to 1. Two dents close enough to overlap but far
+ * enough apart to pull against each other (about a thumb and a half apart, 115 to 200 dp)
+ * squeeze the cloth between them; closer together they act as one dent, further apart as two
+ * that never meet. A dent springing back counts for as much as it is still pressed in.
+ * Checked by numbers: with this, the weave between two fingers is never drawn tighter than
+ * the weave round one, at any distance.
+ */
+internal fun crowding(places: List<Offset>, depths: FloatArray, density: Float): Float {
+    var most = 0f
+    for (i in places.indices) for (j in i + 1 until places.size) {
+        val pressed = minOf(kotlin.math.abs(depths[i]), kotlin.math.abs(depths[j])).coerceAtMost(1f)
+        if (pressed <= 0f) continue
+        val apart = (places[i] - places[j]).getDistance() / density
+        val near = ((apart - 90f) / 50f).coerceIn(0f, 1f) * ((230f - apart) / 70f).coerceIn(0f, 1f)
+        most = maxOf(most, near * near * (3f - 2f * near) * pressed)
+    }
+    return most
+}
+
+/**
+ * One dent in the cloth: the finger it is under, where that finger is (kept after it lifts, so
+ * the cloth springs back where it was pressed), and how far it is pressed in.
+ */
+private class Dent {
+    var finger = NO_FINGER
+    var at by mutableStateOf(Offset.Unspecified)
+    var touching by mutableStateOf(false)
+    val depth = Animatable(0f)
+}
+
+private const val NO_FINGER = -1L
+
+/**
+ * Gives each finger on the pad its own dent and keeps it under that finger, so a dent never
+ * jumps from one finger to another when one of two lifts. A new finger takes a dent that is
+ * flat, or the flattest there is; a finger that has lifted leaves its dent to spring back.
+ */
+private fun follow(dents: List<Dent>, fingers: List<Pair<Long, Offset>>) {
+    for (dent in dents) {
+        if (dent.touching && fingers.none { it.first == dent.finger }) dent.touching = false
+    }
+    for ((id, at) in fingers.take(dents.size)) {
+        val dent = dents.firstOrNull { it.touching && it.finger == id }
+            ?: dents.filter { !it.touching }.minByOrNull { kotlin.math.abs(it.depth.value) }
+            ?: continue
+        dent.finger = id
+        dent.at = at
+        dent.touching = true
+    }
+}
+
 /** The weave: one faint dot every this many dp, offset every other row. */
 private const val WEAVE_DP = 13f
+
+/** A dot's radius. */
+private const val WEAVE_DOT_DP = 1.5f
 
 /**
  * The trackpad, as a room in the hands' green with cloth on it. Until a finger has been on
@@ -122,12 +208,13 @@ internal fun LinkTrackpad(
     val reduced = rememberReducedMotion()
     val room = roomColor(LinkHandsTone)
     val shape = RoundedCornerShape(28.dp)
-    // where the finger is and how far the cloth is pressed; both read only while drawing
-    var finger by remember { mutableStateOf(Offset.Unspecified) }
-    val depth = remember { Animatable(0f) }
-    var touching by remember { mutableStateOf(false) }
-    LaunchedEffect(touching) {
-        if (touching) depth.animateTo(1f, AppMotion.Link.dentIn()) else depth.animateTo(0f, AppMotion.Link.dentOut())
+    // a dent per finger: where each is and how far the cloth is pressed there, read only while drawing
+    val dents = remember { List(DENTS) { Dent() } }
+    var anyFinger by remember { mutableStateOf(false) }
+    dents.forEach { dent ->
+        LaunchedEffect(dent.touching) {
+            if (dent.touching) dent.depth.animateTo(1f, AppMotion.Link.dentIn()) else dent.depth.animateTo(0f, AppMotion.Link.dentOut())
+        }
     }
 
     Box(modifier) {
@@ -135,12 +222,12 @@ internal fun LinkTrackpad(
             Modifier
                 .matchParentSize()
                 .clip(shape)
-                .then(if (reduced) Modifier else Modifier.clothDent({ finger }, { depth.value }))
+                .then(if (reduced) Modifier else Modifier.clothDent(dents))
                 .background(room)
                 .drawWithCache {
                     // the weave: one path of dots, made once for the pad's size
                     val step = WEAVE_DP * density
-                    val r = 1.1f * density
+                    val r = WEAVE_DOT_DP * density
                     val weave = Path()
                     var row = 0
                     var y = step / 2
@@ -156,18 +243,24 @@ internal fun LinkTrackpad(
                     onDrawBehind { drawPath(weave, Color.White.copy(alpha = 0.07f)) }
                 }
                 .drawBehind {
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && finger != Offset.Unspecified && depth.value > 0f) {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                         val r = 70.dp.toPx()
-                        drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.14f * depth.value), Color.Transparent), finger, r), r, finger)
+                        for (dent in dents) {
+                            val at = dent.at
+                            val depth = dent.depth.value
+                            if (at != Offset.Unspecified && depth > 0f) {
+                                drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.14f * depth), Color.Transparent), at, r), r, at)
+                            }
+                        }
                     }
                 }
                 .trackpad(
                     session, config.speed, config.naturalScroll,
                     onTick = haptics::tick, onHold = haptics::click, onTouched = { viewModel.touched = true },
-                    onFinger = { at ->
-                        if (at != null) finger = at
-                        if (touching != (at != null)) onTouch(at != null)
-                        touching = at != null
+                    onFingers = { fingers ->
+                        follow(dents, fingers)
+                        if (anyFinger != fingers.isNotEmpty()) onTouch(fingers.isNotEmpty())
+                        anyFinger = fingers.isNotEmpty()
                     },
                 ),
         ) {
@@ -198,20 +291,28 @@ internal fun LinkTrackpad(
     }
 }
 
-/** Dents this node's drawing where [finger] is, as far as [depth] says (0 flat, 1 pressed, below 0 springing back past flat). */
-private fun Modifier.clothDent(finger: () -> Offset, depth: () -> Float): Modifier =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) then(Api33Dent.modifier(finger, depth)) else this
+/** Dents this node's drawing under each of [dents]' fingers, as far as each is pressed (0 flat, 1 pressed, below 0 springing back past flat). */
+private fun Modifier.clothDent(dents: List<Dent>): Modifier =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) then(Api33Dent.modifier(dents)) else this
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private object Api33Dent {
     private val shader by lazy { RuntimeShader(CLOTH_DENT_AGSL) }
 
-    fun modifier(finger: () -> Offset, depth: () -> Float): Modifier = Modifier.graphicsLayer {
-        val at = finger()
-        val d = depth()
-        if (at != Offset.Unspecified && kotlin.math.abs(d) > 0.004f) {
-            shader.setFloatUniform("uTouch", at.x, at.y)
-            shader.setFloatUniform("uDepth", d)
+    fun modifier(dents: List<Dent>): Modifier = Modifier.graphicsLayer {
+        // a dent with no finger yet, or flat again, counts for nothing
+        val depths = FloatArray(DENTS) { i ->
+            val dent = dents[i]
+            if (dent.at != Offset.Unspecified && kotlin.math.abs(dent.depth.value) > 0.004f) dent.depth.value else 0f
+        }
+        if (depths.any { it != 0f }) {
+            for (i in 0 until DENTS) {
+                val at = dents[i].at.takeIf { it != Offset.Unspecified } ?: Offset.Zero
+                shader.setFloatUniform("uTouch$i", at.x, at.y)
+            }
+            shader.setFloatUniform("uDepth", depths[0], depths[1], depths[2])
+            val places = dents.map { it.at.takeIf { at -> at != Offset.Unspecified } ?: Offset.Zero }
+            shader.setFloatUniform("uPull", PULL * (1f - CROWDED_EASE * crowding(places, depths, density)))
             shader.setFloatUniform("uRadius", 50.dp.toPx())
             shader.setFloatUniform("uSize", size.width, size.height)
             shader.setFloatUniform("uEdge", 28.dp.toPx())

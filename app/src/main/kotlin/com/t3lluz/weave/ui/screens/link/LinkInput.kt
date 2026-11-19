@@ -52,8 +52,8 @@ fun Modifier.trackpad(
     onTick: () -> Unit,
     onHold: () -> Unit,
     onTouched: () -> Unit = {},
-    /** Where the fingers are on the pad (their middle), and null once they lift. */
-    onFinger: (Offset?) -> Unit = {},
+    /** Every finger on the pad, by its own number and where it is; empty once they have all lifted. */
+    onFingers: (List<Pair<Long, Offset>>) -> Unit = {},
 ): Modifier = pointerInput(session, speed, naturalScroll) {
     val slop = viewConfiguration.touchSlop
     val notch = DP_PER_NOTCH * density
@@ -63,7 +63,7 @@ fun Modifier.trackpad(
             val down = awaitFirstDown(requireUnconsumed = false)
             roll?.cancel()   // a finger on the pad stops the page, as it does on a phone
             onTouched()
-            onFinger(down.position)
+            onFingers(listOf(down.id.value to down.position))
             val startedAt = SystemClock.uptimeMillis()
             var fingers = 1
             var travelled = Offset.Zero
@@ -94,8 +94,8 @@ fun Modifier.trackpad(
                     }
                     val pressed = event.changes.filter { it.pressed }
                     if (pressed.isEmpty()) break
-                    // the cloth dents under the first finger, not in the empty middle between two
-                    onFinger(pressed[0].position)
+                    // the cloth dents under each finger
+                    onFingers(pressed.map { it.id.value to it.position })
                     if (pressed.size > fingers) fingers = pressed.size
                     if (pressed.size == 1 && (fingers == 1 || dragging)) {
                         val change = pressed[0]
@@ -131,7 +131,7 @@ fun Modifier.trackpad(
                     event.changes.forEach { it.consume() }
                 }
             } finally {
-                onFinger(null)
+                onFingers(emptyList())
                 // a drag cut short (the phone turned, the sheet opened) must not leave the laptop's button held
                 if (dragging) session.button("left", false)
             }
