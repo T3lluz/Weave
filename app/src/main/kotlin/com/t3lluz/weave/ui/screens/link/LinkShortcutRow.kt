@@ -55,6 +55,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
@@ -183,6 +184,8 @@ internal fun ShortcutRow(
     onEdit: (LinkShortcut) -> Unit,
     onRemove: (LinkShortcut) -> Unit,
     onSetOn: (LinkShortcut, Boolean) -> Unit = { _, _ -> },
+    /** The shortcuts whose steps are on their way to the laptop, by id. */
+    running: Map<String, Int> = emptyMap(),
     grid: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -320,6 +323,8 @@ internal fun ShortcutRow(
                         if (held) pos.snapTo(target) else pos.animateTo(target, AppMotion.Link.reorder())
                     }
                     val fx = remember { TileFx() }
+                    val busy = s.id in running
+                    RunEnd(busy, fx)
                     val tileScope = rememberCoroutineScope()
                     val run by rememberUpdatedState { onRun(s) }
                     val edit by rememberUpdatedState { onEdit(s) }
@@ -477,7 +482,7 @@ internal fun ShortcutRow(
                                 }
                             },
                     ) {
-                        ShortcutTile(s, store, icons, fx)
+                        ShortcutTile(s, store, icons, fx, busy = busy)
                         if (arranging) {
                             RemoveBadge(s.label, Modifier.align(Alignment.TopStart).offset((-5).dp, (-5).dp)) { onRemove(s) }
                         }
@@ -552,6 +557,34 @@ private fun FirstShortcut(onAdd: () -> Unit, modifier: Modifier) {
     }
 }
 
+/**
+ * The end of a shortcut's run, for one that took a while (an app to bring to the front, a wait):
+ * two ticks under the finger and the tile lit once more, so it is plain the keys have gone. One
+ * that is a single key is over as the tap is, and says nothing more.
+ */
+@Composable
+internal fun RunEnd(busy: Boolean, fx: TileFx) {
+    val haptics = rememberHaptics()
+    var since by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(busy) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (busy) {
+            since = now
+        } else if (since != 0L) {
+            val took = now - since
+            since = 0L
+            if (took >= RUN_FELT_MS) {
+                haptics.done()
+                fx.flash.snapTo(1f)
+                fx.flash.animateTo(0f, tween(AppMotion.Link.FLASH_MS))
+            }
+        }
+    }
+}
+
+/** A run shorter than this is over with the tap that started it. */
+private const val RUN_FELT_MS = 400L
+
 /** A tile's motion: pressed in, lit for a moment after a tap, and its picture's hop. */
 internal class TileFx {
     val press = Animatable(0f)
@@ -567,13 +600,22 @@ internal class TileFx {
  * colour is a wash the glass shows through, not a fill.
  */
 @Composable
-internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null, glass: Boolean = false) {
+internal fun ShortcutTile(
+    s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null, glass: Boolean = false,
+    /** Its steps are on their way to the laptop: the tile breathes in its colour until the last has gone. */
+    busy: Boolean = false,
+) {
     val glyph = s.shownGlyph
     val lit = s.toggle != null && s.on
     // the tile wears its icon's colour: the glyph's own, else the main colour of its app's or site's icon
     val tone = rememberTileTone(s, store, icons)
     val fill = if (glass) tone.copy(alpha = 0.15f) else lerp(Background, tone, 0.13f)
     val actions = s.steps.count { it.kind != LinkShortcutKind.WAIT }
+    val breath = if (busy) {
+        rememberInfiniteTransition(label = "running").animateFloat(0.15f, 1f, AppMotion.pulseSpec(durationMs = 520), label = "running")
+    } else {
+        null
+    }
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -587,6 +629,7 @@ internal fun ShortcutTile(s: LinkShortcut, store: LinkShortcutStore, icons: Int,
                 .drawBehind {
                     drawRect(fill)
                     if (lit) drawRect(tone.copy(alpha = 0.24f))
+                    if (breath != null) drawRect(tone.copy(alpha = 0.2f * breath.value))
                     if (fx.flash.value > 0f) drawRect(tone.copy(alpha = 0.34f * fx.flash.value))
                 }
                 .padding(horizontal = 4.dp),

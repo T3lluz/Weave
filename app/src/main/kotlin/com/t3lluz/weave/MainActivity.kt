@@ -34,7 +34,7 @@ import com.t3lluz.weave.ui.viewmodel.LinkViewModel
 import dagger.hilt.android.AndroidEntryPoint
 
 /** Where the app is: the remote, its settings, Settings → AI, or Settings → Updates. */
-private enum class Place { Remote, Settings, Ai, Updates }
+private enum class Place(val depth: Int) { Remote(0), Settings(1), Ai(2), Updates(2) }
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -68,7 +68,14 @@ class MainActivity : ComponentActivity() {
                 Box {
                     AnimatedContent(
                         targetState = place,
-                        transitionSpec = { fadeIn(AppMotion.fadeTween()) togetherWith fadeOut(AppMotion.fadeTween()) },
+                        // deeper in, the new screen slides in over the one before; back, it slides away again
+                        transitionSpec = {
+                            if (targetState.depth > initialState.depth) {
+                                AppMotion.subScreenEnter togetherWith AppMotion.subScreenExit
+                            } else {
+                                AppMotion.subScreenPopEnter togetherWith AppMotion.subScreenPopExit
+                            }
+                        },
                         label = "place",
                     ) { here ->
                         when (here) {

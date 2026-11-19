@@ -29,6 +29,11 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,6 +87,17 @@ fun AppUpdateSheet(
     val info = state.info ?: return
     val context = LocalContext.current
     val busy = state.inProgress
+    // the download landing and Android's prompt coming up are felt; so is an update that fell over
+    val stepHaptics = rememberHaptics()
+    var stepWas by remember { mutableStateOf(state::class) }
+    LaunchedEffect(state::class) {
+        val was = stepWas
+        stepWas = state::class
+        when {
+            state is AppUpdateUiState.Error -> stepHaptics.reject()
+            state is AppUpdateUiState.Installing && was == AppUpdateUiState.Downloading::class -> stepHaptics.confirm()
+        }
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),

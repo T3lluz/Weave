@@ -118,6 +118,31 @@ class HapticHelper(
         if (!phrase(Beat(THUD, 0.45f))) confirm()
     }
 
+    /** A mouse button going down: one firm click, as the switch under a real one gives. */
+    fun press() {
+        if (!phrase(Beat(CLICK, 0.62f))) click()
+    }
+
+    /** ...and coming back up: lighter, so down and up are told apart. */
+    fun release() {
+        if (!phrase(Beat(TICK, 0.42f))) tick()
+    }
+
+    /** The computer couldn't be reached, or said no: a step down that ends on a dull stop. */
+    fun failed() {
+        if (!phrase(Beat(QUICK_FALL, 0.4f), Beat(LOW_TICK, 0.85f, 20))) reject()
+    }
+
+    /** A computer turned up in the list, or woke: two faint steps up. */
+    fun found() {
+        if (!phrase(Beat(LOW_TICK, 0.4f), Beat(TICK, 0.35f, 70))) tick()
+    }
+
+    /** A shortcut's steps have all run on the computer: two ticks, the second firmer. */
+    fun done() {
+        if (!phrase(Beat(TICK, 0.4f), Beat(TICK, 0.75f, 85))) confirm()
+    }
+
     /* ── Light tap — e.g. chip selection, nav item, toggle ───────── */
     fun tick() {
         if (Build.VERSION.SDK_INT >= 34) {
@@ -233,16 +258,18 @@ data class Step(val strength: Float, val sharp: Float)
 data class Stretch(val steps: List<Step>, val stepMs: Int)
 
 /**
- * What a finger sliding over paper feels. A surface's grain is in the surface, so what the
- * finger gets depends on how fast it crosses it: creeping, there is next to nothing; slowly, a
- * faint low murmur; faster, a stronger and higher hiss. Stopped, nothing at all.
+ * What a finger sliding over the pad's cloth feels: one faint texture, the same at any pace and
+ * anywhere on the pad. It is there while the finger glides and gone when it stops.
  *
- * It is played as one long stretch for as long as the finger keeps its pace, simply cut off
- * when the finger rests ([restMs] after its last move), lifts, or slows to a creep. A new
- * stretch is started only when the pace has really changed and stayed changed: every start is a
- * small hitch in the motor, and several a second are a wobble, not paper. So the paces overlap
- * widely, and one is held a while before the next may take over. Within a stretch the strength
- * and the pitch drift a little from one moment to the next, each a short step from the last.
+ * A motor held at one strength and one pitch is a hum, and a hum is a machine. A surface is
+ * uneven, so the strength and the pitch here wander all the time, each moment a short way from
+ * the last and never far from the middle: the pitch over a wide band, so no one tone stands
+ * out, the strength over a narrow one, so nothing is felt as a tick.
+ *
+ * It is played as one long stretch, cut off when the finger rests ([restMs] after its last
+ * move), lifts, or slows to a creep. Every start is a small hitch in the motor, so a stretch is
+ * only started for a new stroke or when the one playing is about to run out, and the next one
+ * carries on from where the last one was.
  *
  * [chance] gives numbers from 0 to 1 and [now] the time in ms; both are handed in so this can
  * be tested without a phone.
@@ -252,24 +279,21 @@ class Grain(
     private val chance: () -> Float = { kotlin.random.Random.nextFloat() },
     private val now: () -> Long = { android.os.SystemClock.uptimeMillis() },
 ) {
-    /** A pace: from which speed (dp a ms) it holds, how strong its grain is and how sharp (low to high). */
-    private class Pace(val from: Float, val strength: Float, val dull: Float, val sharp: Float)
-
     private var speed = 0f          // dp a millisecond, smoothed
     private var lastAt = 0L
     private var moves = 0
-    private var pace = -1           // which pace plays; -1 while nothing does
-    private var startedAt = 0L
+    private var gliding = 0         // moves running at more than a creep
     private var endsAt = 0L
-    private var wanted = -1         // the pace the speed points at, and since when it has
-    private var wantedSince = 0L
-    private var wantedMoves = 0
+    // where the grain's wander stands: the next stretch carries on from here
+    private var strength = STRENGTH
+    private var sharp = (DULL + SHARP) / 2f
 
     /** How long after the finger's last move the grain is cut off. */
     val restMs: Long get() = REST_MS
 
     /** Whether a stretch plays right now. */
-    val playing: Boolean get() = pace >= 0
+    var playing = false
+        private set
 
     /**
      * The finger went [dp] further. A stretch to start playing now (in place of what plays), an
@@ -288,52 +312,42 @@ class Grain(
         val since = (at - lastAt).coerceIn(1, 80)
         speed = if (moves == 2) dp / since else speed * (1f - HEED) + dp / since * HEED
         lastAt = at
-        // the pace this speed belongs to; the one playing keeps the finger a good way past its borders
-        var to = -1
-        for (i in PACES.indices) {
-            val edge = PACES[i].from * if (i <= pace) 1f - GIVE else 1f + GIVE
-            if (speed >= edge) to = i
-        }
-        if (to != wanted) {
-            wanted = to
-            wantedSince = at
-            wantedMoves = 0
-        }
-        wantedMoves++
-        if (pace < 0) {
-            // started once the speed has pointed at the same pace a few moves running
-            if (to < 0 || wantedMoves < SETTLED_MOVES) return null
-        } else {
-            if (to < 0) {
+        if (playing) {
+            if (speed < CREEP * (1f - GIVE)) {
                 // slowed to a creep: the grain goes with it, without waiting
-                pace = -1
+                playing = false
+                gliding = 0
                 return Stretch(emptyList(), stepMs)
             }
-            val runningOut = at >= endsAt - 2 * stepMs
-            // Another pace takes over only once the speed has settled on it (a finger speeding up
-            // passes through the paces between on its way) and this one has played a while.
-            val changed = to != pace && at - wantedSince >= SETTLED_MS && at - startedAt >= HOLD_MS
-            if (!runningOut && !changed) return null
+            // left to play; renewed just before it runs out
+            if (at < endsAt - 2 * stepMs) return null
+            return stretch(at, fresh = false)
         }
-        // Where the grain comes from: the pace that played until now, or (a new stroke) a
-        // fainter, duller version of this one. It eases over from there, so neither a start
-        // nor a change of pace is a step.
-        val p = PACES[to]
-        val before = PACES.getOrNull(pace)
-        val fromStrength = before?.strength ?: (p.strength * 0.45f)
-        val fromSharp = before?.let { (it.dull + it.sharp) / 2f } ?: p.dull
-        pace = to
-        startedAt = at
+        // a stroke's grain starts once the finger has plainly glided a few moves running
+        if (speed < CREEP * (1f + GIVE)) {
+            gliding = 0
+            return null
+        }
+        if (++gliding < SETTLED_MOVES) return null
+        return stretch(at, fresh = true)
+    }
+
+    /** A new stretch. A [fresh] stroke's comes up from fainter and duller; one that renews carries straight on. */
+    private fun stretch(at: Long, fresh: Boolean): Stretch {
+        playing = true
         endsAt = at + STEPS * stepMs.toLong()
-        var strength = p.strength
-        var sharp = (p.dull + p.sharp) / 2f
+        if (fresh) {
+            strength = STRENGTH
+            sharp = (DULL + SHARP) / 2f
+        }
         return Stretch(
             List(STEPS) { i ->
-                strength = (strength + (chance() - 0.5f) * 2f * p.strength * DRIFT).coerceIn(p.strength * (1f - WANDER), p.strength * (1f + WANDER))
-                sharp = (sharp + (chance() - 0.5f) * 2f * (p.sharp - p.dull) * DRIFT).coerceIn(p.dull, p.sharp)
+                strength = (strength + (chance() - 0.5f) * 2f * STRENGTH * WANDER * DRIFT).coerceIn(STRENGTH * (1f - WANDER), STRENGTH * (1f + WANDER))
+                sharp = (sharp + (chance() - 0.5f) * 2f * (SHARP - DULL) * DRIFT).coerceIn(DULL, SHARP)
+                if (!fresh) return@List Step(strength, sharp)
                 val over = ((i + 1f) / EASE_STEPS).coerceAtMost(1f)
                 val eased = over * over * (3f - 2f * over)
-                Step(fromStrength + (strength - fromStrength) * eased, fromSharp + (sharp - fromSharp) * eased)
+                Step(strength * (FAINT + (1f - FAINT) * eased), DULL + (sharp - DULL) * eased)
             },
             stepMs,
         )
@@ -341,12 +355,11 @@ class Grain(
 
     /** The grain was cut off (the finger rested or lifted): the next stroke starts afresh. */
     fun rested() {
-        pace = -1
+        playing = false
         speed = 0f
         lastAt = 0L
         moves = 0
-        wanted = -1
-        wantedMoves = 0
+        gliding = 0
     }
 
     companion object {
@@ -354,42 +367,38 @@ class Grain(
         const val STEPS = 250
         /** A slow finger's moves can be this far apart without the grain breaking off between them. */
         const val REST_MS = 80L
-        /** How much of each new move the speed takes on: little, so a jerk of the finger is not a change of pace. */
+        /** How much of each new move the speed takes on: little, so a jerk of the finger doesn't count. */
         const val HEED = 0.16f
-        /** How far past a pace's border the finger has to go, either way, before the pace changes. */
+        /** Slower than this (dp a ms) is a creep: a finger held nearly still gets nothing. */
+        const val CREEP = 0.05f
+        /** How far past the creep's border the finger has to go, either way, before the grain starts or stops. */
         const val GIVE = 0.38f
-        /** How long a pace plays at least before another takes over, and how long the speed must have pointed at that other. */
-        const val HOLD_MS = 480L
-        const val SETTLED_MS = 170L
-        /** Over how many steps a stretch eases in from what came before it. */
+        /** Over how many steps a stroke's grain comes up, and from how much of its strength. */
         const val EASE_STEPS = 8
-        /** How many moves running the speed must point at one pace before a stroke's grain starts. */
+        const val FAINT = 0.45f
+        /** How many moves running the finger must glide before a stroke's grain starts. */
         const val SETTLED_MOVES = 3
-        /** How far the strength may drift from its pace's, either way, and how much of a band each moment may cross. */
-        const val WANDER = 0.07f
-        const val DRIFT = 0.1f
 
-        /**
-         * Creeping (under the first) gives nothing. Then a slow finger, faint and low; an easy
-         * one; a fast sweep, the strongest and highest, and still only a hiss. Three, close to
-         * each other: enough to tell slow from fast, few enough that a stroke seldom crosses one.
-         */
-        private val PACES = listOf(
-            Pace(from = 0.05f, strength = 0.05f, dull = 0.5f, sharp = 0.58f),
-            Pace(from = 0.3f, strength = 0.068f, dull = 0.68f, sharp = 0.76f),
-            Pace(from = 1.0f, strength = 0.086f, dull = 0.86f, sharp = 0.94f),
-        )
+        /** How strong the grain is: barely there. The one number to turn for more or less of it. */
+        const val STRENGTH = 0.042f
+        /** How far the strength wanders from that, either way. */
+        const val WANDER = 0.16f
+        /** The band the pitch wanders over: wide, so it is a hiss and not a tone. */
+        const val DULL = 0.52f
+        const val SHARP = 0.88f
+        /** How much of its band each may cross from one moment to the next. */
+        const val DRIFT = 0.42f
 
         /** The strongest the grain ever is. */
-        val STRONGEST: Float get() = PACES.last().strength * (1f + WANDER)
+        const val STRONGEST: Float = STRENGTH * (1f + WANDER)
     }
 }
 
 /**
- * Paper under the finger: the trackpad's surface, felt. Phones that can shape a vibration's
+ * Cloth under the finger: the trackpad's surface, felt. Phones that can shape a vibration's
  * strength and pitch over time (Android 16's envelopes; Pixels can) get the real thing. Others
  * with a motor whose strength can be set get the same grain at the motor's own pitch. The rest
- * get nothing, since a plain buzz is not what paper feels like. It is touch feedback to the
+ * get nothing, since a plain buzz is not what cloth feels like. It is touch feedback to the
  * system, so turning that off in the phone's settings turns this off too.
  */
 class PaperFeel(context: android.content.Context) {

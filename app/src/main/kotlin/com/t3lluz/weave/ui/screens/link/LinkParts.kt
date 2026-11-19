@@ -41,11 +41,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,7 +53,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -67,13 +66,14 @@ import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
 import com.t3lluz.weave.data.link.switchDirection
 import com.t3lluz.weave.ui.components.LivePulseDot
+import com.t3lluz.weave.ui.components.IconTile
+import com.t3lluz.weave.ui.components.TileRow
+import com.t3lluz.weave.ui.components.ToneTile
 import com.t3lluz.weave.ui.components.chromeGlass
+import com.t3lluz.weave.ui.theme.LinkScreenTone
 import com.t3lluz.weave.ui.screens.health.HealthDisplay
-import com.t3lluz.weave.ui.theme.AppIcons
-import com.t3lluz.weave.ui.theme.Background
 import com.t3lluz.weave.ui.theme.AppMotion
 import com.t3lluz.weave.ui.theme.Success
-import com.t3lluz.weave.ui.theme.Surface
 import com.t3lluz.weave.ui.theme.TextPrimary
 import com.t3lluz.weave.ui.theme.TextSecondary
 import com.t3lluz.weave.ui.theme.TextTertiary
@@ -87,13 +87,14 @@ internal fun shortLabel(label: String?, name: String?): String =
 
 /**
  * Gives a little under the finger and springs back; the scale is read in the layer, never in
- * composition. Turned off ([enabled] false), it neither gives nor ticks, and reads as off.
+ * composition. Turned off ([enabled] false), it neither gives nor ticks, and reads as off. A
+ * switch hands in the state it is in ([on]) and says under the finger which way it went.
  */
 @Composable
 internal fun Modifier.pressable(label: String, onClick: () -> Unit): Modifier = pressable(label, enabled = true, onClick = onClick)
 
 @Composable
-internal fun Modifier.pressable(label: String, enabled: Boolean, onClick: () -> Unit): Modifier {
+internal fun Modifier.pressable(label: String, enabled: Boolean, on: Boolean? = null, onClick: () -> Unit): Modifier {
     val haptics = rememberHaptics()
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
@@ -103,23 +104,23 @@ internal fun Modifier.pressable(label: String, enabled: Boolean, onClick: () -> 
             scaleX = scale.value
             scaleY = scale.value
         }
-        .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClickLabel = label) { haptics.tick(); onClick() }
-}
-
-/** A round button of the remote's header. */
-@Composable
-internal fun RoundButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(modifier.pressable(label, onClick).size(42.dp).clip(CircleShape).background(Surface), contentAlignment = Alignment.Center) {
-        Icon(icon, label, tint = TextPrimary, modifier = Modifier.size(19.dp))
-    }
+        .clickable(interactionSource = source, indication = null, enabled = enabled, role = if (on != null) Role.Switch else Role.Button, onClickLabel = label) {
+            when (on) {
+                null -> haptics.tick()
+                true -> haptics.toggleOff()
+                false -> haptics.toggleOn()
+            }
+            onClick()
+        }
 }
 
 /**
- * Which laptop, which of its monitors, and how far away it is. The monitor's name slides in
- * from the side the picture came from, so the pill moves with the swipe. Opens the sheet.
+ * The top row's wide tile: which laptop, and under its name which of its monitors and how far
+ * away it is, as a laptop's room in the list says it. The monitor's name slides in from the
+ * side the picture came from, so the tile moves with the swipe. Opens the sheet.
  */
 @Composable
-internal fun StatusPill(
+internal fun StatusTile(
     state: LinkState,
     laptopName: String,
     modifier: Modifier = Modifier,
@@ -128,65 +129,52 @@ internal fun StatusPill(
     onClick: () -> Unit,
 ) {
     val back = state.status == LinkStatus.Reconnecting
-    Row(
-        modifier.pressable("Laptop and screen", onClick).clip(RoundedCornerShape(50)).background(Surface).padding(start = 14.dp, end = 16.dp, top = 11.dp, bottom = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        LivePulseDot(color = if (back) Warning else Success)
-        Spacer(Modifier.width(8.dp))
-        // both names give way before the ping does
-        Text(laptopName, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        // the separator stays put; only the monitor's name slides, inside its own space
-        Text(" · ", color = TextTertiary, fontSize = 13.sp, maxLines = 1)
-        val shown = monitor
-        AnimatedContent(
-            targetState = shown,
-            transitionSpec = {
-                val (dx, _) = switchDirection(initialState, targetState)
-                if (dx == 0) {
-                    fadeIn(AppMotion.fadeTween()) togetherWith fadeOut(AppMotion.fadeTween())
-                } else {
-                    (slideInHorizontally(AppMotion.Link.swipe()) { it * dx } + fadeIn(AppMotion.fadeTween())) togetherWith
-                        (slideOutHorizontally(AppMotion.Link.swipe()) { -it * dx } + fadeOut(AppMotion.fadeTween()))
-                } using SizeTransform(clip = true)
-            },
-            label = "monitor",
-            // the name slides inside its own space, never over the laptop's, and gives way before the ping
-            modifier = Modifier.weight(1f, fill = false).clipToBounds(),
-        ) { m ->
-            val name = if (back) "Reconnecting" else shortLabel(m?.label, state.monitor)
-            if (name.isNotBlank()) {
-                Text(name, color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    ToneTile("Laptop and screen", LinkScreenTone, TileRow.Middle, modifier, pressedScale = 0.96f, onClick = onClick) { _, _ ->
+        Column(Modifier.fillMaxWidth().padding(start = 13.dp, end = 10.dp)) {
+            Text(
+                laptopName, style = HealthDisplay, color = TextPrimary, fontSize = 16.sp, lineHeight = 19.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LivePulseDot(color = if (back) Warning else Success)
+                Spacer(Modifier.width(6.dp))
+                AnimatedContent(
+                    targetState = monitor,
+                    transitionSpec = {
+                        val (dx, _) = switchDirection(initialState, targetState)
+                        if (dx == 0) {
+                            fadeIn(AppMotion.fadeTween()) togetherWith fadeOut(AppMotion.fadeTween())
+                        } else {
+                            (slideInHorizontally(AppMotion.Link.swipe()) { it * dx } + fadeIn(AppMotion.fadeTween())) togetherWith
+                                (slideOutHorizontally(AppMotion.Link.swipe()) { -it * dx } + fadeOut(AppMotion.fadeTween()))
+                        } using SizeTransform(clip = true)
+                    },
+                    label = "monitor",
+                    // the name slides inside its own space, and gives way before the ping does
+                    modifier = Modifier.weight(1f, fill = false).clipToBounds(),
+                ) { m ->
+                    val name = if (back) "Reconnecting" else shortLabel(m?.label, state.monitor)
+                    Text(name, color = TextSecondary, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (!back) {
+                    state.pingMs?.let { Text(" · $it ms", color = TextTertiary, fontSize = 12.sp, lineHeight = 15.sp, maxLines = 1) }
+                }
             }
-        }
-        if (!back) {
-            state.pingMs?.let { Text(" · $it ms", color = TextTertiary, fontSize = 13.sp, maxLines = 1) }
         }
     }
 }
 
 /**
- * A tile of the dock, after Health's meters: a flat tint of its own colour with its icon in
- * that colour; the icon says it all, its name is for screen readers. On, the tile fills more of
- * the colour and the icon turns white, with a small hop each time it is flipped. [shape] lets
- * the end tiles take the trackpad's corners.
+ * A tile of the dock: its icon in its own colour; the icon says it all, its name is for screen
+ * readers. One that is a [switch] is lit while [on]. [shape] lets the end tiles take the
+ * trackpad's corners.
  */
 @Composable
-internal fun DockTile(icon: ImageVector, label: String, tone: Color, shape: Shape, modifier: Modifier = Modifier, on: Boolean = false, onClick: () -> Unit) {
-    val fill by animateColorAsState(lerp(Background, tone, if (on) 0.42f else 0.14f), AppMotion.colorTween(), label = "dock")
-    val ink by animateColorAsState(if (on) Color.White else tone, AppMotion.colorTween(), label = "dockInk")
-    val hop = remember { Animatable(1f) }
-    var seen by remember { mutableStateOf(on) }
-    LaunchedEffect(on) {
-        if (on != seen) {
-            seen = on
-            hop.snapTo(0.74f)
-            hop.animateTo(1f, AppMotion.Link.press())
-        }
-    }
-    Box(modifier.pressable(label, onClick).height(54.dp).clip(shape).background(fill), contentAlignment = Alignment.Center) {
-        Icon(icon, label, tint = ink, modifier = Modifier.size(22.dp).graphicsLayer { scaleX = hop.value; scaleY = hop.value })
-    }
+internal fun DockTile(
+    icon: ImageVector, label: String, tone: Color, shape: Shape, modifier: Modifier = Modifier,
+    on: Boolean = false, switch: Boolean = false, onClick: () -> Unit,
+) {
+    IconTile(icon, label, tone, shape, modifier, on, switch, TileRow.DockHeight, onClick)
 }
 
 /** A control of the full-screen panel. Each arrives a beat after the one before it. */
@@ -257,7 +245,7 @@ internal fun KeyRow(mods: Set<String>, tone: Color, onMods: (Set<String>) -> Uni
         KeyChip("esc", tone) { onKey("esc") }
         KeyChip("tab", tone) { onKey("tab") }
         listOf("ctrl", "alt", "super", "shift").forEach { mod ->
-            KeyChip(mod, tone, on = mod in mods) { onMods(if (mod in mods) mods - mod else mods + mod) }
+            KeyChip(mod, tone, on = mod in mods, switch = true) { onMods(if (mod in mods) mods - mod else mods + mod) }
         }
         KeyChip("←", tone) { onKey("left") }
         KeyChip("↓", tone) { onKey("down") }
@@ -273,11 +261,11 @@ internal fun KeyRow(mods: Set<String>, tone: Color, onMods: (Set<String>) -> Uni
 }
 
 @Composable
-private fun KeyChip(label: String, tone: Color, on: Boolean = false, onClick: () -> Unit) {
+private fun KeyChip(label: String, tone: Color, on: Boolean = false, switch: Boolean = false, onClick: () -> Unit) {
     val fill by animateColorAsState(if (on) tone.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.08f), AppMotion.colorTween(), label = "key")
     Box(
         Modifier
-            .pressable(label, onClick)
+            .pressable(label, enabled = true, on = on.takeIf { switch }, onClick = onClick)
             .height(38.dp)
             .widthIn(min = 42.dp)
             .clip(RoundedCornerShape(12.dp))

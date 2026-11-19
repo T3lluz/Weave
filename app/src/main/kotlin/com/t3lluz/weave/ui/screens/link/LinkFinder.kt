@@ -46,12 +46,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,7 +68,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -83,6 +82,8 @@ import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
 import com.t3lluz.weave.ui.components.LivePulseDot
 import com.t3lluz.weave.ui.components.PillButton
+import com.t3lluz.weave.ui.components.IconTile
+import com.t3lluz.weave.ui.components.TileRow
 import com.t3lluz.weave.ui.screens.health.HealthDisplay
 import com.t3lluz.weave.ui.screens.health.HealthSection
 import com.t3lluz.weave.ui.screens.health.pressSink
@@ -150,20 +151,24 @@ internal fun LinkFinder(
         onAddress(address)
     }
 
+    // a computer that turns up, or wakes, while the list is open: two faint steps up
+    val finderHaptics = rememberHaptics()
+    val ready = laptops.hosts.count { it.online }
+    var readyWas by remember { mutableStateOf(-1) }
+    LaunchedEffect(ready, laptops.loaded) {
+        if (!laptops.loaded) return@LaunchedEffect
+        if (readyWas in 0 until ready) finderHaptics.found()
+        readyWas = ready
+    }
+
     val headline = headlineFor(state, picked, pickedName, laptops)
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-        Box(
-            Modifier
-                .align(Alignment.End)
-                .padding(end = 12.dp, top = 8.dp)
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Surface)
-                .pressable("Settings", onSettings),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(AppIcons.Settings, "Settings", tint = TextPrimary, modifier = Modifier.size(20.dp))
-        }
+        // the top row's last tile, where the remote has its own: the same grid on every screen
+        IconTile(
+            AppIcons.Settings, "Settings", TextSecondary, TileRow.TopLast,
+            Modifier.align(Alignment.End).padding(end = 16.dp, top = 6.dp).width(TileRow.TopTile),
+            onClick = onSettings,
+        )
         Column(
             // (a computer removed, or one that turns up, moves the rest over; it doesn't jump)
             Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).animateContentSize(AppMotion.entranceSpring()),

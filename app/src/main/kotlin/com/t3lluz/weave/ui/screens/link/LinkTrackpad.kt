@@ -38,11 +38,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -207,6 +207,7 @@ private const val WEAVE_DOT_DP = 1.5f
 /**
  * The trackpad, as a room in the hands' green with cloth on it. Until a finger has been on
  * it, it says what fingers do. Its left and right buttons sit at its foot, outside the dent.
+ * While a held finger drags, the weave is lit under the fingers and Left shows itself held.
  */
 @Composable
 internal fun LinkTrackpad(
@@ -223,8 +224,14 @@ internal fun LinkTrackpad(
     val session = viewModel.session
     val haptics = rememberHaptics()
     val context = androidx.compose.ui.platform.LocalContext.current
-    // the pad's surface under the finger: a faint, uneven grain while it glides
+    // the pad's surface under the finger: one faint, uneven grain while it glides
     val paper = remember(context) { com.t3lluz.weave.ui.util.PaperFeel(context) }
+    // A held finger has taken hold of what is under the pointer. Until the last finger lifts the
+    // laptop's left button is down: the weave is lit under every finger that is on the pad, and
+    // the Left button at the foot shows itself held, as it is.
+    var held by remember { mutableStateOf(false) }
+    val grip = remember { Animatable(0f) }
+    LaunchedEffect(held) { grip.animateTo(if (held) 1f else 0f, if (held) AppMotion.Link.dentIn() else tween(220)) }
     val reduced = rememberReducedMotion()
     val room = roomColor(LinkHandsTone)
     val shape = RoundedCornerShape(28.dp)
@@ -292,6 +299,21 @@ internal fun LinkTrackpad(
                     }
                     onDrawBehind {
                         drawPath(weave, Color.White.copy(alpha = 0.07f))
+                        // held: the dots round each finger on the pad are lit in the hands' green, brightest close in
+                        val g = grip.value.coerceIn(0f, 1.2f)
+                        if (g > 0.01f) {
+                            for (dent in dents) {
+                                val at = dent.at
+                                if (!dent.touching || at == Offset.Unspecified) continue
+                                for ((share, light) in GRIP_BANDS) {
+                                    val r = GRIP_DP * density * share * (0.55f + 0.45f * g)
+                                    ring.rewind()
+                                    ring.fillType = PathFillType.NonZero
+                                    ring.addOval(androidx.compose.ui.geometry.Rect(at.x - r, at.y - r, at.x + r, at.y + r))
+                                    clipPath(ring) { drawPath(weave, LinkHandsTone.copy(alpha = (light * g).coerceIn(0f, 1f))) }
+                                }
+                            }
+                        }
                         // The rings: the same dots again, lit only where each ring is right now. Three
                         // bands, the middle one brightest, each a plain colour through a ring-shaped
                         // cut-out (no gradient: the dots are small enough that bands read as a soft edge).
@@ -329,13 +351,20 @@ internal fun LinkTrackpad(
                 }
                 .trackpad(
                     session, config.speed, config.naturalScroll,
-                    onTick = haptics::tick, onHold = haptics::grab, onTouched = { viewModel.touched = true },
+                    onTick = haptics::tick, onTouched = { viewModel.touched = true },
+                    onHold = {
+                        haptics.grab()
+                        held = true
+                    },
                     // a tick for each finger of a tap, so the hand knows which button it pressed
                     onTap = { fingers, at ->
                         haptics.taps(fingers)
                         ripple(at)
                     },
-                    onDrop = haptics::drop,
+                    onDrop = {
+                        haptics.drop()
+                        held = false
+                    },
                     onGlide = paper::glide,
                     onFingers = { fingers ->
                         if (fingers.isEmpty()) paper.lift()
@@ -377,7 +406,7 @@ internal fun LinkTrackpad(
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp, start = 8.dp, end = 8.dp),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadButton(session, "left", "Left", RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 20.dp), Modifier.weight(1f))
+                PadButton(session, "left", "Left", RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 20.dp), Modifier.weight(1f), held = held)
                 PadButton(session, "right", "Right", RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomEnd = 20.dp, bottomStart = 12.dp), Modifier.weight(1f))
             }
         }
@@ -422,11 +451,15 @@ private object Api33Dent {
  * cloth never warps it. Held, it fills with the hands' green and the mouse's side lights up.
  */
 @Composable
-private fun PadButton(session: LinkSession, button: String, label: String, shape: RoundedCornerShape, modifier: Modifier = Modifier) {
+private fun PadButton(
+    session: LinkSession, button: String, label: String, shape: RoundedCornerShape, modifier: Modifier = Modifier,
+    /** The pad is holding this button down itself (a held drag): it shows pressed without a finger on it. */
+    held: Boolean = false,
+) {
     val haptics = rememberHaptics()
     var down by remember { mutableStateOf(false) }
     val press = remember { Animatable(0f) }
-    LaunchedEffect(down) { press.animateTo(if (down) 1f else 0f, AppMotion.Link.press()) }
+    LaunchedEffect(down || held) { press.animateTo(if (down || held) 1f else 0f, AppMotion.Link.press()) }
     val face = lerp(roomColor(LinkHandsTone), Color.Black, 0.3f)
     Box(
         modifier
@@ -438,7 +471,11 @@ private fun PadButton(session: LinkSession, button: String, label: String, shape
             }
             .clip(shape)
             .background(face)
-            .mouseButton(session, button, onTick = haptics::tick, onPressed = { down = it }),
+            // a click going down and a lighter one coming up, as the switch under a real button gives
+            .mouseButton(session, button, onTick = haptics::press, onPressed = {
+                if (!it) haptics.release()
+                down = it
+            }),
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.matchParentSize().graphicsLayer { alpha = press.value }.background(LinkHandsTone.copy(alpha = 0.22f)))
@@ -492,6 +529,10 @@ private const val RIPPLE_BAND_DP = 30f
 private const val RIPPLE_LIGHT = 0.5f
 /** The ring's three bands, inside to outside: how much of that light each gets. */
 private val RIPPLE_BANDS = floatArrayOf(0.45f, 1f, 0.45f)
+
+/** How far round a finger the weave is lit while something is held, and its two bands: (share of that, light). */
+private const val GRIP_DP = 92f
+private val GRIP_BANDS = listOf(1f to 0.34f, 0.66f to 0.4f)
 
 /** How long the mark of a sweep stays. */
 private const val SWEEP_SHOWN_MS = 650L

@@ -44,15 +44,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -80,7 +80,10 @@ import com.t3lluz.weave.data.link.LinkShortcut
 import com.t3lluz.weave.data.link.monitorUnder
 import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
-import com.t3lluz.weave.ui.components.SquircleShape
+import com.t3lluz.weave.ui.components.BackTile
+import com.t3lluz.weave.ui.components.IconTile
+import com.t3lluz.weave.ui.components.TileRow
+import androidx.compose.ui.graphics.lerp
 import com.t3lluz.weave.ui.components.chromeGlass
 import com.t3lluz.weave.ui.screens.ai.MenuRow
 import com.t3lluz.weave.ui.theme.AppIcons
@@ -176,6 +179,8 @@ fun LinkScreen(
                 viewModel.justPaired = false
             }
             state.status == LinkStatus.Reconnecting && was == LinkStatus.Online -> linkHaptics.lost()
+            // it couldn't be reached, or its owner said no: a step down that ends on a dull stop
+            (state.status == LinkStatus.Failed || state.status == LinkStatus.Denied) && was != state.status -> linkHaptics.failed()
         }
     }
 
@@ -339,9 +344,11 @@ fun LinkScreen(
                 is LinkEvent.Clipboard -> if (event.sync) {
                     if (!sendNewClip()) clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
                 } else if (event.text.isEmpty()) {
+                    linkHaptics.reject()
                     toast = "Nothing is copied on $laptopName"
                 } else {
                     clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Laptop", event.text)))
+                    linkHaptics.confirm()
                     toast = "Copied from $laptopName"
                 }
                 is LinkEvent.Toast -> Unit
@@ -388,7 +395,7 @@ fun LinkScreen(
     }
 
     // Each switch says what it did: the two sounds are easy to mix up.
-    val actions = remember(session, laptopName) {
+    val actions = remember(session, laptopName, linkHaptics) {
         LinkActions(
             laptopSound = { on ->
                 session.setLaptopSound(on)
@@ -401,7 +408,12 @@ fun LinkScreen(
             sendClipboard = {
                 scope.launch {
                     val text = clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString().orEmpty()
-                    if (text.isEmpty()) toast = "Nothing is copied on this phone" else session.copyToLaptop(text)
+                    if (text.isEmpty()) {
+                        linkHaptics.reject()
+                        toast = "Nothing is copied on this phone"
+                    } else {
+                        session.copyToLaptop(text)
+                    }
                 }
             },
             fetchClipboard = { session.askClipboard() },
@@ -465,6 +477,9 @@ fun LinkScreen(
             modifier = Modifier.size(1.dp).alpha(0f),
         )
         LinkToast(toast, hazeState, Modifier.align(Alignment.TopCenter))
+        LaunchedEffect(viewModel.offered != null || viewModel.alreadyPaired != null) {
+            if (viewModel.offered != null || viewModel.alreadyPaired != null) linkHaptics.click()
+        }
         // A code was scanned or a link opened: nothing connects until the owner says so.
         viewModel.offered?.let { invite ->
             PairQuestion(invite, onPair = viewModel::acceptOffer, onDismiss = viewModel::declineOffer)
@@ -567,36 +582,44 @@ private fun Upright(
         val pointer = session.pointer.collectAsState()
         val pointerOn by remember(state.monitors) { derivedStateOf { monitorUnder(state.monitors, pointer.value) } }
         Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-            // The header: back, which laptop and screen (opens the sheet), zoom, and at the far right the
-            // button that folds the screen away and brings it back. Nothing sits on the picture.
+            // The top row, in the dock's tiles: back, which laptop and screen (opens the sheet),
+            // zoom, and at the far end the tiles that fold the shortcuts and the screen away and
+            // bring them back. Each wears its own colour, as the dock's do. Nothing sits on the picture.
             Row(
-                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp),
+                Modifier.fillMaxWidth().statusBarsPadding().padding(start = TileRow.Side, end = TileRow.Side, top = 6.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RoundButton(AppIcons.ArrowBack, "Back") { onNavigateBack() }
-                Spacer(Modifier.width(8.dp))
-                // the pill keeps to its own width at the start; the buttons stand at the far end
-                Box(Modifier.weight(1f)) {
-                    StatusPill(state, laptopName, monitor = if (showPicture) state.shownMonitor else pointerOn ?: state.shownMonitor, onClick = onMore)
-                }
+                BackTile(onNavigateBack, label = "Leave $laptopName")
+                Spacer(Modifier.width(TileRow.Gap))
+                // the wide tile takes what the others leave, and gives room as the zoom arrives
+                StatusTile(
+                    state, laptopName, Modifier.weight(1f),
+                    monitor = if (showPicture) state.shownMonitor else pointerOn ?: state.shownMonitor, onClick = onMore,
+                )
                 AnimatedVisibility(
                     visible = showPicture,
                     enter = fadeIn(AppMotion.fadeTween()) + expandHorizontally(AppMotion.Link.panel()),
                     exit = fadeOut(AppMotion.fadeTween()) + shrinkHorizontally(AppMotion.Link.panel()),
                 ) {
                     Row {
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(TileRow.Gap))
                         val zoomed = geometry.zoomState.floatValue > 1.01f
-                        RoundButton(if (zoomed) AppIcons.ZoomOut else AppIcons.ZoomIn, if (zoomed) "Show the whole screen" else "Zoom in") {
+                        IconTile(
+                            if (zoomed) AppIcons.ZoomOut else AppIcons.ZoomIn, if (zoomed) "Show the whole screen" else "Zoom in",
+                            LinkScreenTone, TileRow.Middle, Modifier.width(TileRow.TopTile), on = zoomed,
+                        ) {
                             viewModel.zoom = if (zoomed) 1f else max(geometry.fillZoom, 2f)
                         }
                     }
                 }
-                Spacer(Modifier.width(8.dp))
-                ShortcutsToggle(config.showShortcuts, onToggle = { viewModel.change { it.copy(showShortcuts = !it.showShortcuts) } })
+                Spacer(Modifier.width(TileRow.Gap))
+                ShortcutsToggle(
+                    config.showShortcuts, if (state.canHidePicture) TileRow.Middle else TileRow.TopLast,
+                    onToggle = { viewModel.change { it.copy(showShortcuts = !it.showShortcuts) } }, Modifier.width(TileRow.TopTile),
+                )
                 if (state.canHidePicture) {
-                    Spacer(Modifier.width(8.dp))
-                    ScreenToggle(showPicture, onToggle = { session.setPicture(!showPicture) })
+                    Spacer(Modifier.width(TileRow.Gap))
+                    ScreenToggle(showPicture, TileRow.TopLast, onToggle = { session.setPicture(!showPicture) }, Modifier.width(TileRow.TopTile))
                 }
             }
             // The laptop's screen, edge to edge for the most picture.
@@ -631,7 +654,12 @@ private fun Upright(
                             }
                             .pointerInput(session) {
                                 detectTransformGestures { _, pan, change, _ ->
-                                    if (change != 1f) viewModel.zoom = (geometry.zoom * change).coerceIn(1f, 8f)
+                                    if (change != 1f) {
+                                        val to = (geometry.zoom * change).coerceIn(1f, 8f)
+                                        // pinched back to the whole screen: it stops there, and says so
+                                        if (to == 1f && geometry.zoom > 1f) haptics.notch()
+                                        viewModel.zoom = to
+                                    }
                                     geometry.nudge(pan)
                                 }
                             },
@@ -647,7 +675,7 @@ private fun Upright(
             ) {
                 // a row under the screen; with the screen folded away, a grid four across
                 ShortcutRow(
-                    shortcuts = shortcuts, store = viewModel.shortcutStore,
+                    shortcuts = shortcuts, store = viewModel.shortcutStore, running = viewModel.running,
                     arranging = arranging, onArranging = onArranging,
                     onRun = { viewModel.runShortcut(it) }, onAdd = onAddShortcut, onEdit = onEditShortcut,
                     onSetOn = { s, on -> viewModel.setShortcutOn(s, on) },
@@ -661,7 +689,7 @@ private fun Upright(
                 viewModel = viewModel, config = config,
                 hint = !viewModel.touched && !imeVisible,
                 buttons = !imeVisible,
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(start = TileRow.Side, end = TileRow.Side, top = 6.dp),
                 nativePad = LinkSession.TOUCHPAD in state.caps,
                 onTouch = { padDown = it },
             )
@@ -674,18 +702,16 @@ private fun Upright(
             }
             // The dock: Health's meter tiles, each in its colour; the end tiles take the trackpad's corners.
             Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Modifier.fillMaxWidth().padding(start = TileRow.Side, end = TileRow.Side, top = 8.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(TileRow.Gap),
             ) {
-                val first = RoundedCornerShape(topStart = 18.dp, topEnd = 14.dp, bottomEnd = 14.dp, bottomStart = 28.dp)
-                val middle = RoundedCornerShape(14.dp)
-                val last = RoundedCornerShape(topStart = 14.dp, topEnd = 18.dp, bottomEnd = 28.dp, bottomStart = 14.dp)
-                DockTile(AppIcons.Keyboard, "Keyboard", LinkHandsTone, first, Modifier.weight(1f), on = imeVisible) { onKeyboard() }
+                val middle = TileRow.Middle
+                DockTile(AppIcons.Keyboard, "Keyboard", LinkHandsTone, TileRow.DockFirst, Modifier.weight(1f), on = imeVisible, switch = true) { onKeyboard() }
                 DockTile(AppIcons.Fullscreen, "Full screen", LinkScreenTone, middle, Modifier.weight(1f)) { onSideways() }
                 DockTile(
                     if (state.laptopSound) AppIcons.LaptopSound else AppIcons.LaptopSoundOff,
                     if (state.laptopSound) "Laptop's sound plays here" else "Play the laptop's sound here", LinkSoundTone, middle, Modifier.weight(1f),
-                    on = state.laptopSound,
+                    on = state.laptopSound, switch = true,
                 ) { actions.laptopSound(!state.laptopSound) }
                 Box(Modifier.weight(1f)) {
                     DockTile(AppIcons.ClipboardSwap, "Clipboard", LinkClipboardTone, middle, Modifier.fillMaxWidth()) { clipMenu = true }
@@ -699,14 +725,20 @@ private fun Upright(
                         }
                     }
                 }
-                DockTile(AppIcons.Ellipsis, "More", TextSecondary, last, Modifier.weight(1f)) { onMore() }
+                DockTile(AppIcons.Ellipsis, "More", TextSecondary, TileRow.DockLast, Modifier.weight(1f)) { onMore() }
             }
         }
     }
 }
 
-/** The full-screen panel's glass: a squircle folded to its handle, the same corners unfolded. */
-private val PanelShape = SquircleShape(26.dp)
+/**
+ * The full-screen panel's glass, in the hands' mint: folded to its handle it is a circle, and
+ * unfolded it keeps those corners. Round, and [PANEL_INSET] in from the screen's top corner, so
+ * it sits inside a phone's own rounded corner instead of running into it.
+ */
+private val PanelShape = RoundedCornerShape(28.dp)
+private val PANEL_INSET = 16.dp
+private val PanelTint = lerp(Color(0xFF0B0B0D), LinkHandsTone, 0.4f).copy(alpha = 0.74f)
 
 // ── on its side: the laptop's screen fills the phone ────────────────────────────
 
@@ -729,6 +761,8 @@ private fun Sideways(
     val haptics = rememberHaptics()
     val shortcuts by viewModel.shortcuts.collectAsState()
     var open by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+    val cloth = remember(context) { com.t3lluz.weave.ui.util.PaperFeel(context) }
     // every touch of a control starts the wait again
     var used by remember { mutableIntStateOf(0) }
     LaunchedEffect(open, used) {
@@ -757,7 +791,14 @@ private fun Sideways(
                     if (viewModel.touchMode) {
                         Modifier.touchscreen(session, geometry::toScreen, onTick = haptics::tick, onHold = haptics::click)
                     } else {
-                        Modifier.trackpad(session, config.speed, config.naturalScroll, onTick = haptics::tick, onHold = haptics::click)
+                        // the same pad as upright, without the cloth to see: its taps, its hold and its grain
+                        Modifier.trackpad(
+                            session, config.speed, config.naturalScroll,
+                            onTick = haptics::tick, onHold = haptics::grab, onDrop = haptics::drop,
+                            onTap = { fingers, _ -> haptics.taps(fingers) },
+                            onGlide = cloth::glide, onFingers = { if (it.isEmpty()) cloth.lift() },
+                            onSweep = { haptics.swoosh() },
+                        )
                     },
                 ),
         )
@@ -766,8 +807,9 @@ private fun Sideways(
         PanelStack(
             Modifier
                 .align(Alignment.TopEnd)
-                .padding(12.dp)
-                .chromeGlass(hazeState, PanelShape)
+                // clear of the screen's own round corner, which a box 12 dp in runs into on a Pixel
+                .padding(top = PANEL_INSET, end = PANEL_INSET)
+                .chromeGlass(hazeState, PanelShape, tint = PanelTint, outline = LinkHandsTone.copy(alpha = 0.22f))
                 // it grows from its handle: the handle stays put and in view, and the rest is uncovered from it
                 .animateContentSize(AppMotion.Link.panel(), alignment = Alignment.TopEnd)
                 .padding(5.dp),
@@ -798,7 +840,7 @@ private fun Sideways(
                 }
             },
             shelf = if (open && shortcuts.isNotEmpty()) {
-                { PanelShortcuts(shortcuts, viewModel.shortcutStore, onUsed = { used++ }) { viewModel.runShortcut(it) } }
+                { PanelShortcuts(shortcuts, viewModel.shortcutStore, viewModel.running, onUsed = { used++ }) { viewModel.runShortcut(it) } }
             } else null,
         )
 

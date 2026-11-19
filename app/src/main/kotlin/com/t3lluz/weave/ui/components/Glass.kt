@@ -70,8 +70,10 @@ fun Modifier.glass(
     tint: Color = GlassSpec.ChromeTint,
     blur: Dp = GlassSpec.Blur,
 ): Modifier {
+    // where blur can't run, the same tint nearly opaque
+    val solid = if (tint == GlassSpec.ChromeTint) GlassSpec.Fallback else tint.copy(alpha = 0.94f)
     if (hazeState == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-        return this.background(GlassSpec.Fallback)
+        return this.background(solid)
     }
     return this.hazeEffect(state = hazeState) {
         backgroundColor = GlassSpec.Backdrop
@@ -80,7 +82,7 @@ fun Modifier.glass(
         inputScale = HazeInputScale.Fixed(INPUT_SCALE)
         noiseFactor = 0f
         tints = listOf(HazeTint(tint))
-        fallbackTint = HazeTint(GlassSpec.Fallback)
+        fallbackTint = HazeTint(solid)
     }
 }
 
@@ -89,11 +91,17 @@ fun Modifier.glass(
  * the shape, the glass inside it, and a faint edge. Anything that sizes or clips the content
  * (`animateContentSize`, scrolling) goes after it, or it cuts the shadow off at the bounds.
  */
-fun Modifier.chromeGlass(hazeState: HazeState?, shape: Shape): Modifier = this
+fun Modifier.chromeGlass(
+    hazeState: HazeState?,
+    shape: Shape,
+    /** The glass's wash: the chrome's dark, or a colour of its own (the full-screen panel's mint). */
+    tint: Color = GlassSpec.ChromeTint,
+    outline: Color = GlassSpec.OutlineColor,
+): Modifier = this
     .chromeShadow(shape)
     .clip(shape)
-    .glass(hazeState)
-    .chromeOutline(shape)
+    .glass(hazeState, tint)
+    .chromeOutline(shape, outline)
 
 /**
  * Plain frosted glass laid over an opaque [base]. The base is what keeps it clean over other
@@ -160,9 +168,9 @@ fun Modifier.chromeShadow(shape: Shape): Modifier = drawWithCache {
  * The chrome's edge: a faint hairline just inside the outline, so the chrome keeps its size
  * and its content keeps clear of it. Draws over the glass and under the content.
  */
-fun Modifier.chromeOutline(shape: Shape): Modifier = drawWithCache {
+fun Modifier.chromeOutline(shape: Shape, color: Color = GlassSpec.OutlineColor): Modifier = drawWithCache {
     val outline = shape.createOutline(size, layoutDirection, this)
     // Stroked on the outline at twice the width; the outer half falls outside the clip.
     val stroke = Stroke(GlassSpec.OutlineWidth.toPx() * 2f)
-    onDrawBehind { drawOutline(outline, GlassSpec.OutlineColor, style = stroke) }
+    onDrawBehind { drawOutline(outline, color, style = stroke) }
 }

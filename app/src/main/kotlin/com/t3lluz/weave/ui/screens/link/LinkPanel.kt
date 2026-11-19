@@ -18,9 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -129,7 +129,10 @@ private const val DIAGONAL = 0.70710677f
  * A tap runs one, as on the shelf; [onUsed] says the panel is in use, so it stays open.
  */
 @Composable
-internal fun PanelShortcuts(shortcuts: List<LinkShortcut>, store: LinkShortcutStore, onUsed: () -> Unit, onRun: (LinkShortcut) -> Unit) {
+internal fun PanelShortcuts(
+    shortcuts: List<LinkShortcut>, store: LinkShortcutStore, running: Map<String, Int> = emptyMap(),
+    onUsed: () -> Unit, onRun: (LinkShortcut) -> Unit,
+) {
     val icons by store.icons.collectAsState()
     val scroll = rememberScrollState()
     LaunchedEffect(scroll.isScrollInProgress) { if (scroll.isScrollInProgress) onUsed() }
@@ -140,7 +143,7 @@ internal fun PanelShortcuts(shortcuts: List<LinkShortcut>, store: LinkShortcutSt
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             shortcuts.forEachIndexed { i, s ->
-                key(s.id) { PanelShortcut(i, s, store, icons) { onUsed(); onRun(s) } }
+                key(s.id) { PanelShortcut(i, s, store, icons, busy = s.id in running) { onUsed(); onRun(s) } }
             }
         }
     }
@@ -148,10 +151,11 @@ internal fun PanelShortcuts(shortcuts: List<LinkShortcut>, store: LinkShortcutSt
 
 /** One shortcut of the panel: the shelf's tile on glass. It arrives after the controls, lights and hops when tapped. */
 @Composable
-private fun PanelShortcut(index: Int, s: LinkShortcut, store: LinkShortcutStore, icons: Int, onRun: () -> Unit) {
+private fun PanelShortcut(index: Int, s: LinkShortcut, store: LinkShortcutStore, icons: Int, busy: Boolean, onRun: () -> Unit) {
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
     val fx = remember { TileFx() }
+    RunEnd(busy, fx)
     val arrived = remember { Animatable(0f) }
     // after the controls over it; the ones far along the row don't keep anyone waiting
     LaunchedEffect(Unit) { arrived.animateTo(1f, AppMotion.Link.arrive(3 + min(index, 7))) }
@@ -193,7 +197,7 @@ private fun PanelShortcut(index: Int, s: LinkShortcut, store: LinkShortcutStore,
                 )
             },
     ) {
-        ShortcutTile(s, store, icons, fx, glass = true)
+        ShortcutTile(s, store, icons, fx, glass = true, busy = busy)
     }
 }
 

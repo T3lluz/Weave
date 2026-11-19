@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,6 +81,19 @@ fun AiSettingsScreen(
     val state by viewModel.state.collectAsState()
     var picking by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
+    // the test's answer, and a sign-in that went through, are felt as they land
+    LaunchedEffect(state.test) {
+        when (state.test) {
+            is AiTest.Passed -> haptics.confirm()
+            is AiTest.Failed -> haptics.reject()
+            else -> Unit
+        }
+    }
+    var signedIn by remember { mutableStateOf(state.claude.connected) }
+    LaunchedEffect(state.claude.connected) {
+        if (state.claude.connected && !signedIn) haptics.paired()
+        signedIn = state.claude.connected
+    }
 
     Column(
         modifier = Modifier

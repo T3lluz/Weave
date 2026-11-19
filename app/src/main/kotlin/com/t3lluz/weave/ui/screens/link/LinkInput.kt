@@ -61,6 +61,8 @@ private const val FLING_END = 0.0012f
  * A laptop trackpad under the thumb. One finger moves the pointer (faster strokes travel
  * further), a tap clicks, a held finger drags, two fingers scroll and the page keeps rolling
  * after they lift, a two-finger tap is the right button and a three-finger tap the middle one.
+ * Once a held finger has taken hold, the drag is every finger's: another one can carry it on
+ * while the first stays put, and it ends when the last finger lifts.
  *
  * With [nativePad] the computer has a touchpad of its own for the phone's fingers: from two
  * fingers up they are sent as they are, and its desktop reads them as it reads its own pad. So
@@ -82,7 +84,7 @@ fun Modifier.trackpad(
     nativePad: Boolean = false,
     /** Two fingers flicked sideways pressed back (true) or forward: only where the phone does that itself. */
     onSweep: (back: Boolean) -> Unit = {},
-    /** A finger (or the fingers together) went this many dp further over the pad: for its paper feel. */
+    /** A finger (or the fingers together) went this many dp further over the pad: for the cloth's feel. */
     onGlide: (Float) -> Unit = {},
     /** A tap, with how many fingers and where the last of them was: for a tick per finger and a ripple. */
     onTap: (fingers: Int, at: Offset) -> Unit = { _, _ -> onTick() },
@@ -157,8 +159,12 @@ fun Modifier.trackpad(
                         if (landed.isEmpty()) landedAt = pressed[0].uptimeMillis
                         pressed.forEach { if (it.id.value !in landed) landed[it.id.value] = it.position }
                     }
-                    if (pressed.size == 1 && (fingers == 1 || dragging)) {
-                        val change = pressed[0]
+                    if (dragging || (pressed.size == 1 && fingers == 1)) {
+                        // One finger moves the pointer. In a drag any finger does: the one that
+                        // took hold can stay where it is while another carries what is held, and
+                        // they can take turns, since the drag lasts until the last of them lifts.
+                        // The finger that went furthest counts, so one resting adds nothing.
+                        val change = pressed.maxBy { it.positionChange().getDistanceSquared() }
                         val delta = change.positionChange()
                         travelled += delta
                         if (!moved && hypot(travelled.x, travelled.y) > slop) moved = true

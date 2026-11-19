@@ -292,11 +292,24 @@ class LinkViewModel @Inject constructor(
      * tile answers the tap; [keep] is false for one that isn't saved yet (Try it in the sheet).
      */
     fun runShortcut(s: LinkShortcut, keep: Boolean = true) {
-        viewModelScope.launch { session.runSteps(s.steps) }
+        viewModelScope.launch {
+            // counted, not just noted: a second tap while the first run is on its way starts another
+            running = running + (s.id to (running[s.id] ?: 0) + 1)
+            try {
+                session.runSteps(s.steps)
+            } finally {
+                val left = (running[s.id] ?: 1) - 1
+                running = if (left > 0) running + (s.id to left) else running - s.id
+            }
+        }
         if (keep && s.toggle != null) {
             shortcutStore.shortcuts.value.firstOrNull { it.id == s.id }?.let { shortcutStore.save(it.copy(on = !it.on)) }
         }
     }
+
+    /** The shortcuts whose steps are on their way to the laptop right now, by id: their tiles show it. */
+    var running by mutableStateOf(mapOf<String, Int>())
+        private set
 
     /** Puts a two-look shortcut in the look that matches the laptop, without running it. */
     fun setShortcutOn(s: LinkShortcut, on: Boolean) {
