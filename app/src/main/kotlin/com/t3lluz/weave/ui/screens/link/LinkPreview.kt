@@ -23,6 +23,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.t3lluz.weave.ui.theme.TextPrimary
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,7 +55,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.t3lluz.weave.data.link.LinkSession
 import com.t3lluz.weave.data.link.LinkVideo
-import com.t3lluz.weave.ui.components.LoadingSpinner
 import com.t3lluz.weave.ui.components.PillButton
 import com.t3lluz.weave.ui.theme.AppIcons
 import com.t3lluz.weave.ui.theme.LinkScreenTone
@@ -266,18 +269,23 @@ internal fun LinkPreview(
         // the cover lifts when the first frame is decoded
         AnimatedVisibility(visible = !live && still == null, enter = fadeIn(AppMotion.Link.leave()), exit = fadeOut(AppMotion.Link.picture())) {
             Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+                // Waiting for the picture: the trackpad's weave, with rings of light running out
+                // through it as the phone reaches for the screen. Not behind an error: nothing is
+                // being reached for then.
+                if (error == null || note != null) {
+                    com.t3lluz.weave.ui.components.WeaveWaves(Modifier.matchParentSize(), tone = LinkScreenTone)
+                }
                 when {
-                    note != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        LoadingSpinner(color = LinkScreenTone, size = 22.dp)
-                        Spacer(Modifier.height(10.dp))
-                        Text(note, color = TextSecondary, fontSize = 13.sp)
-                    }
+                    note != null -> Text(
+                        note, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
                     error != null -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
                         Text(error, color = TextSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(12.dp))
                         PillButton(icon = AppIcons.Refresh, label = "Try again", accent = LinkScreenTone, onClick = onRetry)
                     }
-                    else -> LoadingSpinner(color = LinkScreenTone)
+                    else -> Unit   // the weave says it
                 }
             }
         }

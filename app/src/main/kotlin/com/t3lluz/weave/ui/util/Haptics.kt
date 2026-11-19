@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalView
 private const val CLICK = 1        // VibrationEffect.Composition.PRIMITIVE_CLICK
 private const val THUD = 2
 private const val QUICK_RISE = 4
+private const val SLOW_RISE = 5
 private const val QUICK_FALL = 6
 private const val TICK = 7
 private const val LOW_TICK = 8
@@ -95,6 +96,21 @@ class HapticHelper(
     /** A new computer let this phone in: a swell, a firm click, and two ticks trailing off. */
     fun paired() {
         if (!phrase(Beat(QUICK_RISE, 0.4f), Beat(CLICK, 0.85f), Beat(TICK, 0.55f, 90), Beat(TICK, 0.3f, 80))) confirm()
+    }
+
+    /** A sleeping computer is called: a slow swell, as of something stirring. */
+    fun wake() {
+        if (!phrase(Beat(SLOW_RISE, 0.45f), Beat(TICK, 0.5f))) click()
+    }
+
+    /** The picture slid over to another monitor: a soft step, lighter than a tap's. */
+    fun slide() {
+        if (!phrase(Beat(LOW_TICK, 0.7f))) tick()
+    }
+
+    /** A slider crossed one of its marks: the faintest tick there is. */
+    fun notch() {
+        if (!phrase(Beat(LOW_TICK, 0.35f))) tick()
     }
 
     /** A computer taken off the list: one dull thud. */
@@ -299,17 +315,25 @@ class Grain(
             val changed = to != pace && at - wantedSince >= SETTLED_MS && at - startedAt >= HOLD_MS
             if (!runningOut && !changed) return null
         }
+        // Where the grain comes from: the pace that played until now, or (a new stroke) a
+        // fainter, duller version of this one. It eases over from there, so neither a start
+        // nor a change of pace is a step.
+        val p = PACES[to]
+        val before = PACES.getOrNull(pace)
+        val fromStrength = before?.strength ?: (p.strength * 0.45f)
+        val fromSharp = before?.let { (it.dull + it.sharp) / 2f } ?: p.dull
         pace = to
         startedAt = at
         endsAt = at + STEPS * stepMs.toLong()
-        val p = PACES[to]
         var strength = p.strength
         var sharp = (p.dull + p.sharp) / 2f
         return Stretch(
-            List(STEPS) {
+            List(STEPS) { i ->
                 strength = (strength + (chance() - 0.5f) * 2f * p.strength * DRIFT).coerceIn(p.strength * (1f - WANDER), p.strength * (1f + WANDER))
                 sharp = (sharp + (chance() - 0.5f) * 2f * (p.sharp - p.dull) * DRIFT).coerceIn(p.dull, p.sharp)
-                Step(strength, sharp)
+                val over = ((i + 1f) / EASE_STEPS).coerceAtMost(1f)
+                val eased = over * over * (3f - 2f * over)
+                Step(fromStrength + (strength - fromStrength) * eased, fromSharp + (sharp - fromSharp) * eased)
             },
             stepMs,
         )
@@ -330,28 +354,30 @@ class Grain(
         const val STEPS = 250
         /** A slow finger's moves can be this far apart without the grain breaking off between them. */
         const val REST_MS = 80L
-        /** How much of each new move the speed takes on. */
-        const val HEED = 0.3f
+        /** How much of each new move the speed takes on: little, so a jerk of the finger is not a change of pace. */
+        const val HEED = 0.16f
         /** How far past a pace's border the finger has to go, either way, before the pace changes. */
-        const val GIVE = 0.3f
+        const val GIVE = 0.38f
         /** How long a pace plays at least before another takes over, and how long the speed must have pointed at that other. */
-        const val HOLD_MS = 260L
-        const val SETTLED_MS = 90L
+        const val HOLD_MS = 480L
+        const val SETTLED_MS = 170L
+        /** Over how many steps a stretch eases in from what came before it. */
+        const val EASE_STEPS = 8
         /** How many moves running the speed must point at one pace before a stroke's grain starts. */
         const val SETTLED_MOVES = 3
         /** How far the strength may drift from its pace's, either way, and how much of a band each moment may cross. */
-        const val WANDER = 0.2f
-        const val DRIFT = 0.3f
+        const val WANDER = 0.07f
+        const val DRIFT = 0.1f
 
         /**
-         * Creeping (under the first) gives nothing. Then: a slow finger, faint and low; an easy
-         * one; a brisk one; a fast sweep, the strongest and highest, and still only a hiss.
+         * Creeping (under the first) gives nothing. Then a slow finger, faint and low; an easy
+         * one; a fast sweep, the strongest and highest, and still only a hiss. Three, close to
+         * each other: enough to tell slow from fast, few enough that a stroke seldom crosses one.
          */
         private val PACES = listOf(
-            Pace(from = 0.045f, strength = 0.042f, dull = 0.35f, sharp = 0.55f),
-            Pace(from = 0.16f, strength = 0.062f, dull = 0.55f, sharp = 0.75f),
-            Pace(from = 0.45f, strength = 0.082f, dull = 0.7f, sharp = 0.9f),
-            Pace(from = 1.1f, strength = 0.1f, dull = 0.82f, sharp = 1f),
+            Pace(from = 0.05f, strength = 0.05f, dull = 0.5f, sharp = 0.58f),
+            Pace(from = 0.3f, strength = 0.068f, dull = 0.68f, sharp = 0.76f),
+            Pace(from = 1.0f, strength = 0.086f, dull = 0.86f, sharp = 0.94f),
         )
 
         /** The strongest the grain ever is. */

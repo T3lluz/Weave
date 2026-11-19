@@ -179,6 +179,14 @@ fun LinkScreen(
         }
     }
 
+    // the picture going over to another monitor is a soft step under the thumb
+    val shownMonitor = state.shownMonitor?.name
+    var monitorWas by remember { mutableStateOf(shownMonitor) }
+    LaunchedEffect(shownMonitor) {
+        if (monitorWas != null && shownMonitor != null && shownMonitor != monitorWas) linkHaptics.slide()
+        monitorWas = shownMonitor
+    }
+
     // While the remote is up, Android's back does not leave it: a swipe in from the side belongs to
     // the trackpad, and one that the system takes anyway must not end the session. The arrow in the
     // corner is the way out; back says so, once in a while.

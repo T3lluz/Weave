@@ -41,6 +41,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,7 +82,6 @@ import com.t3lluz.weave.data.link.isSaved
 import com.t3lluz.weave.data.link.LinkState
 import com.t3lluz.weave.data.link.LinkStatus
 import com.t3lluz.weave.ui.components.LivePulseDot
-import com.t3lluz.weave.ui.components.LoadingSpinner
 import com.t3lluz.weave.ui.components.PillButton
 import com.t3lluz.weave.ui.screens.health.HealthDisplay
 import com.t3lluz.weave.ui.screens.health.HealthSection
@@ -162,7 +165,8 @@ internal fun LinkFinder(
             Icon(AppIcons.Settings, "Settings", tint = TextPrimary, modifier = Modifier.size(20.dp))
         }
         Column(
-            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            // (a computer removed, or one that turns up, moves the rest over; it doesn't jump)
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).animateContentSize(AppMotion.entranceSpring()),
         ) {
             Spacer(Modifier.height(18.dp))
             AnimatedContent(
@@ -208,9 +212,11 @@ internal fun LinkFinder(
                 )
             }
             if (!laptops.loaded && !picked) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 22.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    LoadingSpinner(color = LinkScreenTone, size = 18.dp)
-                }
+                // looking: a patch of the weave, with rings going out as the phone asks who is there
+                com.t3lluz.weave.ui.components.WeaveWaves(
+                    Modifier.fillMaxWidth().height(132.dp).clip(RoundedCornerShape(28.dp)).background(roomColor(LinkScreenTone)),
+                    tone = LinkScreenTone,
+                )
             }
             if (laptops.problem != null) {
                 Text(
@@ -409,7 +415,7 @@ private fun LaptopRoom(
         // asleep, and the phone knows how to wake it
         if (onWake != null && online == false && !stuck && !trying && !waiting) {
             Spacer(Modifier.height(14.dp))
-            PillButton(icon = AppIcons.Power, label = "Wake it", accent = LinkScreenTone, emphasized = true, onClick = onWake)
+            PillButton(icon = AppIcons.Power, label = "Wake it", accent = LinkScreenTone, emphasized = true, onClick = { haptics.wake(); onWake() })
         }
         if (stuck) {
             Spacer(Modifier.height(14.dp))
@@ -448,6 +454,24 @@ private fun LaptopGlyph(glow: Glow, modifier: Modifier = Modifier) {
         if (!running) return@LaunchedEffect
         while (true) withFrameMillis { frame = it }
     }
+    // A screen that is on catches the light every few seconds: a soft band crossing it. Each
+    // laptop keeps its own time, so a list of them never glints in step.
+    val glint = remember { Animatable(-1f) }
+    val idling = glow == Glow.On && !reduced && resumed
+    LaunchedEffect(idling) {
+        if (!idling) {
+            glint.snapTo(-1f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(1_400L + kotlin.random.Random.nextLong(3_600L))
+            glint.snapTo(0f)
+            glint.animateTo(1f, tween(950, easing = LinearEasing))
+            glint.snapTo(-1f)
+        }
+    }
+    // ...and comes on, or goes dark, softly instead of at a blow
+    val power by animateFloatAsState(if (glow == Glow.Off) 0f else 1f, tween(420), label = "power")
     Canvas(modifier) {
         val tone = LinkScreenTone
         val lidW = size.width * 0.78f
@@ -459,12 +483,23 @@ private fun LaptopGlyph(glow: Glow, modifier: Modifier = Modifier) {
         val inset = 3.dp.toPx()
         val screenTL = Offset(left + inset, inset)
         val screen = Size(lidW - inset * 2, lidH - inset * 2)
-        val lit = when (glow) {
-            Glow.On -> tone.copy(alpha = 0.85f)
-            Glow.Busy -> tone.copy(alpha = 0.35f)
-            Glow.Off -> Color.Black.copy(alpha = 0.55f)
-        }
+        val on = if (glow == Glow.Busy) tone.copy(alpha = 0.35f) else tone.copy(alpha = 0.85f)
+        val lit = lerp(Color.Black.copy(alpha = 0.55f), on, power)
         drawRoundRect(lit, screenTL, screen, CornerRadius(r * 0.6f))
+        if (glint.value >= 0f) {
+            val t = glint.value
+            val band = screen.width * 0.5f
+            val x = screenTL.x - band + (screen.width + band) * t
+            clipRect(screenTL.x, screenTL.y, screenTL.x + screen.width, screenTL.y + screen.height) {
+                drawRect(
+                    Brush.linearGradient(
+                        listOf(Color.Transparent, Color.White.copy(alpha = 0.3f), Color.Transparent),
+                        start = Offset(x, screenTL.y + screen.height), end = Offset(x + band, screenTL.y),
+                    ),
+                    Offset(x, screenTL.y), Size(band, screen.height),
+                )
+            }
+        }
         if (glow == Glow.Busy) {
             val t = if (running) (frame % 1400L) / 1400f else 0.5f
             val band = screen.width * 0.34f

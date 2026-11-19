@@ -15,6 +15,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.systemGestureExclusion
@@ -47,6 +53,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Brush
@@ -224,8 +231,23 @@ internal fun LinkTrackpad(
     // a dent per finger: where each is and how far the cloth is pressed there, read only while drawing
     val dents = remember { List(DENTS) { Dent() } }
     var anyFinger by remember { mutableStateOf(false) }
-    // a tap sends a ring out through the weave from where it landed (filled in below)
-    var onTapAt: (Offset) -> Unit = {}
+    // A tap sends a ring out through the weave from where it landed: the dots light up as it
+    // passes and settle again. One runs from the middle when the pad first appears.
+    val ripples = remember { mutableStateListOf<Ripple>() }
+    val scope = rememberCoroutineScope()
+    fun ripple(at: Offset, far: Float = 1f) {
+        if (reduced || ripples.size >= 4) return
+        val one = Ripple(at, far)
+        ripples += one
+        scope.launch {
+            one.out.animateTo(1f, tween((RIPPLE_MS * far).toInt(), easing = LinearEasing))
+            ripples -= one
+        }
+    }
+    var padSize by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(padSize != IntSize.Zero) {
+        if (padSize != IntSize.Zero) ripple(Offset(padSize.width / 2f, padSize.height / 2f), far = 1.9f)
+    }
     // two fingers just flicked sideways: which way (true is back), and a count so the same way twice shows twice
     var swept by remember { mutableStateOf<Boolean?>(null) }
     var sweeps by remember { mutableIntStateOf(0) }
@@ -256,6 +278,7 @@ internal fun LinkTrackpad(
                     val step = WEAVE_DP * density
                     val r = WEAVE_DOT_DP * density
                     val weave = Path()
+                    val ring = Path()
                     var row = 0
                     var y = step / 2
                     while (y < size.height) {
@@ -267,8 +290,31 @@ internal fun LinkTrackpad(
                         y += step * 0.87f
                         row++
                     }
-                    onDrawBehind { drawPath(weave, Color.White.copy(alpha = 0.07f)) }
+                    onDrawBehind {
+                        drawPath(weave, Color.White.copy(alpha = 0.07f))
+                        // The rings: the same dots again, lit only where each ring is right now. Three
+                        // bands, the middle one brightest, each a plain colour through a ring-shaped
+                        // cut-out (no gradient: the dots are small enough that bands read as a soft edge).
+                        for (one in ripples) {
+                            val t = one.out.value
+                            val band = RIPPLE_BAND_DP * density / 3f
+                            // it runs out fast and slows, and dims evenly on the way: seen all the way out
+                            val reach = RIPPLE_REACH_DP * density * one.far * (1f - (1f - t) * (1f - t))
+                            val fade = 1f - t
+                            for ((i, share) in RIPPLE_BANDS.withIndex()) {
+                                val inner = (reach - band * 1.5f + band * i).coerceAtLeast(0f)
+                                val outer = reach - band * 1.5f + band * (i + 1)
+                                if (outer <= 0f) continue
+                                ring.rewind()
+                                ring.fillType = PathFillType.EvenOdd
+                                ring.addOval(androidx.compose.ui.geometry.Rect(one.at.x - outer, one.at.y - outer, one.at.x + outer, one.at.y + outer))
+                                if (inner > 0f) ring.addOval(androidx.compose.ui.geometry.Rect(one.at.x - inner, one.at.y - inner, one.at.x + inner, one.at.y + inner))
+                                clipPath(ring) { drawPath(weave, Color.White.copy(alpha = RIPPLE_LIGHT * share * fade)) }
+                            }
+                        }
+                    }
                 }
+                .onSizeChanged { padSize = it }
                 .drawBehind {
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                         val r = 70.dp.toPx()
@@ -287,7 +333,7 @@ internal fun LinkTrackpad(
                     // a tick for each finger of a tap, so the hand knows which button it pressed
                     onTap = { fingers, at ->
                         haptics.taps(fingers)
-                        onTapAt(at)
+                        ripple(at)
                     },
                     onDrop = haptics::drop,
                     onGlide = paper::glide,
@@ -433,6 +479,19 @@ private fun MouseGlyph(left: Boolean, lit: () -> Float) {
         drawLine(LinkHandsTone, Offset(0f, split), Offset(size.width, split), stroke)
     }
 }
+
+/** A ring running out through the weave: where it started, how far it goes (1 is a tap's), and how far out it is (0 to 1). */
+private class Ripple(val at: Offset, val far: Float) {
+    val out = Animatable(0f)
+}
+
+private const val RIPPLE_MS = 760
+private const val RIPPLE_REACH_DP = 150f
+private const val RIPPLE_BAND_DP = 30f
+/** How much brighter than the resting weave (0.07) the dots get at the ring's crest. */
+private const val RIPPLE_LIGHT = 0.5f
+/** The ring's three bands, inside to outside: how much of that light each gets. */
+private val RIPPLE_BANDS = floatArrayOf(0.45f, 1f, 0.45f)
 
 /** How long the mark of a sweep stays. */
 private const val SWEEP_SHOWN_MS = 650L

@@ -27,11 +27,12 @@ class GrainTest {
 
     @Test
     fun aFasterFingerGetsAStrongerAndHigherGrain() {
-        val slow = stroke(grain(), 0.08f, 400).single().steps
-        val brisk = stroke(grain(), 0.7f, 400).last().steps
-        val fast = stroke(grain(), 2.5f, 400).last().steps
-        assertTrue(slow.maxOf { it.strength } < brisk.minOf { it.strength })
-        assertTrue(brisk.maxOf { it.strength } < fast.minOf { it.strength })
+        // (past the first moments, in which each eases in)
+        val slow = stroke(grain(), 0.1f, 400).single().steps.drop(Grain.EASE_STEPS)
+        val easy = stroke(grain(), 0.6f, 400).last().steps.drop(Grain.EASE_STEPS)
+        val fast = stroke(grain(), 2.5f, 400).last().steps.drop(Grain.EASE_STEPS)
+        assertTrue(slow.maxOf { it.strength } < easy.minOf { it.strength })
+        assertTrue(easy.maxOf { it.strength } < fast.minOf { it.strength })
         assertTrue("low and dull when slow, a high hiss when fast", slow.maxOf { it.sharp } < fast.minOf { it.sharp })
         assertTrue("never more than a hiss", fast.maxOf { it.strength } <= Grain.STRONGEST + 1e-5f)
     }
@@ -56,7 +57,7 @@ class GrainTest {
         // right on the border between two paces, a little over and a little under by turns, for three seconds
         repeat(375) { step ->
             clock += 8
-            val dpPerMs = if (step % 2 == 0) 0.49f else 0.41f
+            val dpPerMs = if (step % 2 == 0) 0.34f else 0.26f
             if (g.glide(dpPerMs * 8) != null) starts++
         }
         assertTrue("one pace is picked and kept: $starts starts", starts <= 2)
@@ -65,12 +66,15 @@ class GrainTest {
     @Test
     fun aRealChangeOfPaceStartsTheNextGrainOnceAndNotAtOnce() {
         val g = grain()
-        stroke(g, 0.25f, 600)
-        val changed = clock
-        val after = stroke(g, 2.5f, 800)
-        assertEquals("straight to the fast grain, not through every pace on the way", 1, after.size)
-        assertTrue(after[0].steps.isNotEmpty())
-        assertTrue(clock - changed >= 0)
+        val before = stroke(g, 0.1f, 700).single().steps
+        val after = stroke(g, 2.5f, 900)
+        assertEquals("straight to the fast grain, not through the pace between", 1, after.size)
+        val steps = after[0].steps
+        // it takes over from where the slow one was, and gets to its own over a few steps
+        assertTrue(abs(steps[0].strength - before.last().strength) < 0.012f)
+        assertTrue(steps[Grain.EASE_STEPS].strength > before.last().strength * 1.4f)
+        val biggest = steps.take(Grain.EASE_STEPS + 2).zipWithNext { a, b -> abs(a.strength - b.strength) }.max()
+        assertTrue("no step on the way: $biggest", biggest < 0.012f)
     }
 
     @Test
@@ -105,11 +109,14 @@ class GrainTest {
     fun theGrainDriftsInShortSteps() {
         var roll = 0f
         val g = grain { roll.also { roll = (roll + 0.37f) % 1f } }
-        val steps = stroke(g, 0.6f, 200).single().steps
-        assertEquals(Grain.STEPS, steps.size)
+        val all = stroke(g, 0.6f, 200).single().steps
+        assertEquals(Grain.STEPS, all.size)
+        val steps = all.drop(Grain.EASE_STEPS)
         assertTrue("it does drift", steps.map { it.strength }.toSet().size > 5)
         val mean = steps.map { it.strength }.average().toFloat()
         val biggest = steps.zipWithNext { a, b -> abs(a.strength - b.strength) }.max()
-        assertTrue("never a jump: $biggest of $mean", biggest <= mean * 0.4f)
+        assertTrue("barely: $biggest of $mean", biggest <= mean * 0.12f)
+        assertTrue("and stays near its pace's own strength", steps.all { abs(it.strength - mean) <= mean * 0.16f })
+        assertTrue("a stroke starts faint and comes up to it", all.first().strength < mean * 0.75f)
     }
 }

@@ -79,6 +79,7 @@ internal fun LinkSheet(
     onDismiss: () -> Unit,
     onSettings: () -> Unit,
 ) {
+    val sheetHaptics = com.t3lluz.weave.ui.util.rememberHaptics()
     val session = viewModel.session
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -170,7 +171,11 @@ internal fun LinkSheet(
                     Spacer(Modifier.width(14.dp))
                     Slider(
                         value = config.speed,
-                        onValueChange = { v -> viewModel.change { it.copy(speed = v) } },
+                        onValueChange = { v ->
+                            // a faint tick at every quarter of speed, as a dial has marks
+                            if ((v * 4f).toInt() != (config.speed * 4f).toInt()) sheetHaptics.notch()
+                            viewModel.change { it.copy(speed = v) }
+                        },
                         valueRange = 0.6f..4f,
                         colors = SliderDefaults.colors(thumbColor = LinkHandsTone, activeTrackColor = LinkHandsTone, inactiveTrackColor = Color.White.copy(alpha = 0.08f)),
                         modifier = Modifier.weight(1f),

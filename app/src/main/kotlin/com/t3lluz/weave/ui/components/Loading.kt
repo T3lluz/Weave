@@ -1,6 +1,15 @@
 package com.t3lluz.weave.ui.components
 
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,12 +54,36 @@ fun LoadingSpinner(
     size: Dp = LoadingSpec.SizeDefault,
     stroke: Dp = LoadingSpec.Stroke,
 ) {
-    CircularProgressIndicator(
-        modifier = modifier.size(size),
-        color = color,
-        strokeWidth = stroke,
+    // Weave's own: two threads twisting round each other, the one in front bright and the one
+    // behind dim, travelling along. Still (one twist, held) while tickers are paused.
+    val paused = LocalTickersPaused.current
+    val turn = if (paused) null else rememberInfiniteTransition(label = "threads").animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1150, easing = LinearEasing)), label = "turn",
     )
+    Canvas(modifier.size(size)) {
+        val phase = (turn?.value ?: 0.12f) * 2f * PI.toFloat()
+        val wide = this.size.width
+        val middle = this.size.height / 2f
+        val swing = this.size.height * 0.3f
+        val pieces = 26
+        val width = stroke.toPx()
+        fun angle(i: Int) = TWISTS * 2f * PI.toFloat() * i / pieces - phase
+        fun at(i: Int, thread: Int) = Offset(wide * i / pieces, middle + swing * sin(angle(i) + thread * PI.toFloat()))
+        // what lies behind first, then what lies in front over it
+        for (front in listOf(false, true)) for (thread in 0..1) for (i in 0 until pieces) {
+            val depth = cos(angle(i) + thread * PI.toFloat())
+            if ((depth >= 0f) != front) continue
+            // the ends taper off, so the threads come from nowhere and go nowhere
+            val taper = sin(PI.toFloat() * (i + 0.5f) / pieces).coerceIn(0f, 1f)
+            val alpha = (if (front) 1f else 0.38f) * (0.25f + 0.75f * taper)
+            drawLine(color.copy(alpha = color.alpha * alpha), at(i, thread), at(i + 1, thread), width, StrokeCap.Round)
+        }
+    }
 }
+
+/** How many times the two threads go round each other across the loader. */
+private const val TWISTS = 1.25f
 
 @Composable
 fun SkeletonBlock(
