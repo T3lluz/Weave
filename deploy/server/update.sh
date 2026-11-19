@@ -23,8 +23,11 @@ main() {
   local new sha current
   new=$(git -C "$repo" rev-parse "origin/$branch")
   sha=${new:0:7}
-  current=$(readlink "$build/current" 2>/dev/null || true)
-  if [[ "$current" == "site-$sha" && "$force" != "--force" ]]; then
+  # What is running, not what was switched to: the mark is written only after the
+  # container restarted on the new build, so a deploy that failed half way (a pull,
+  # a Docker hiccup) is tried again the next minute.
+  current=$(cat "$build/.deployed" 2>/dev/null || true)
+  if [[ "$current" == "$sha" && "$force" != "--force" ]]; then
     exit 0
   fi
 
@@ -56,6 +59,7 @@ main() {
   # either way: its working directory is the build it started on.
   "${compose[@]}" up -d --remove-orphans --quiet-pull
   "${compose[@]}" restart weave
+  echo "$sha" >"$build/.deployed"
 
   echo "deployed $sha"
 }

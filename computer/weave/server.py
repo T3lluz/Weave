@@ -97,6 +97,13 @@ QUIET_STEPS, QUIET_SECONDS = 16, 120
 # closed, so this is what bounds that (the app's own limit is 500 characters a step)
 QUIET_TEXT = 4000
 
+def _plain(text: str) -> str:
+    """A clip as it is compared: line ends plain and the last one off. What the phone sent reads
+    back a little different (wl-paste -n drops the last line break, Windows hands line ends
+    back plain), and that is not a new copy."""
+    return text.replace("\r\n", "\n").rstrip("\n")
+
+
 class Session:
     """One phone, connected."""
 
@@ -606,7 +613,7 @@ class Session:
                 continue
             # an image, or nothing at all, isn't text to send; and what the phone sent reads back
             # without its last line break here (wl-paste -n), which is not a new copy
-            if text and text.rstrip("\n") != (self.clip_last or "").rstrip("\n"):
+            if text and _plain(text) != _plain(self.clip_last or ""):
                 # what a password manager copied stays on this computer: it is not sent, and
                 # not kept as seen either, so it is looked at again (and passed over) until
                 # something else is copied
@@ -812,7 +819,7 @@ class Session:
                     turned = bool(msg.get("nat")) != await d.touchpad_natural()
                 try:
                     pad.frame([(int(n), min(max(float(x), -2000.0), 2000.0), min(max(float(y), -2000.0), 2000.0)) for n, x, y in fingers], turned)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pad.lift()
         elif t == "media":
             inj.key(str(msg.get("cmd", "")))

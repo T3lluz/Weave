@@ -147,9 +147,14 @@ async def hardware_cursors() -> int | None:
 async def touchpad_natural() -> bool:
     """Whether Hyprland scrolls its touchpads the natural way (the page follows the fingers)."""
     try:
-        return bool(json.loads(await request("j/getoption input:touchpad:natural_scroll")).get("int", 0))
+        return option_on(json.loads(await request("j/getoption input:touchpad:natural_scroll")))
     except (ValueError, TypeError):
         return False
+
+
+def option_on(reply: dict) -> bool:
+    """An on/off option as Hyprland answers it: under "bool" since 0.56, under "int" before."""
+    return bool(reply.get("bool", reply.get("int", 0)))
 
 
 async def pointer_gain() -> float | None:

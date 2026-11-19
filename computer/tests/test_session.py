@@ -788,6 +788,23 @@ class FingersOnThePad(unittest.TestCase):
         self.assertTrue(0 < self.last(inject.ABS_MT_POSITION_X) < top)
         self.assertTrue(0 < self.last(inject.ABS_MT_POSITION_Y) < top)
 
+    def test_a_finger_that_is_nowhere_is_left_out_and_none_is_left_stuck(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0), (3, 60.0, 40.0)])
+        pad.frame([(1, float("nan"), 40.0), (2, 40.0, 40.0)])
+        self.assertEqual(len(pad._slots), 1, "the one that made no sense and the one that left are both up")
+        pad.lift()
+        ups = [v for frame in self.sent for t, c, v in frame if c == inject.ABS_MT_TRACKING_ID and v == -1]
+        self.assertEqual(len(ups), 3)
+        self.assertIn((inject.EV_KEY, inject.BTN_TOUCH, 0), self.sent[-1])
+
+    def test_hyprland_says_on_and_off_two_ways(self):
+        from weave import hypr
+        self.assertTrue(hypr.option_on({"option": "input:touchpad:natural_scroll", "bool": True, "set": True}))
+        self.assertFalse(hypr.option_on({"option": "input:touchpad:natural_scroll", "bool": False, "set": True}))
+        self.assertTrue(hypr.option_on({"option": "input:touchpad:natural_scroll", "int": 1, "set": True}))
+        self.assertFalse(hypr.option_on({}))
+
     def test_letting_go_of_everything_lifts_the_fingers_too(self):
         from weave.inject import Injector
         inject, pad = self.pad()
@@ -797,6 +814,39 @@ class FingersOnThePad(unittest.TestCase):
         pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
         inj.release_all()
         self.assertFalse(pad.touched)
+
+
+class FingersInBunches(unittest.IsolatedAsyncioTestCase):
+    """Frames that arrive together are not written together: libinput takes that for a jump."""
+
+    def pad(self):
+        from weave import inject
+        self.sent = []
+        device = SimpleNamespace(emit=lambda *e: self.sent.append((asyncio.get_running_loop().time(), list(e))), close=lambda: None)
+        return inject, inject.Touchpad(device)
+
+    async def test_the_same_fingers_again_wait_their_turn_and_only_the_newest_is_written(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        for step in (1, 2, 3):
+            pad.frame([(1, 20.0 + step, 40.0), (2, 40.0 + step, 40.0)])
+        self.assertEqual(len(self.sent), 1, "the landing went at once, the rest wait")
+        await asyncio.sleep(inject.PAD_PACE * 3)
+        self.assertEqual(len(self.sent), 2)
+        self.assertGreaterEqual(self.sent[1][0] - self.sent[0][0], inject.PAD_PACE * 0.9)
+        xs = [v for t, c, v in self.sent[1][1] if c == inject.ABS_MT_POSITION_X]
+        landed = [v for t, c, v in self.sent[0][1] if c == inject.ABS_MT_POSITION_X]
+        self.assertEqual(xs[0] - landed[0], 3 * inject.PAD_UNITS_PER_MM, "where the fingers are now, not a step on the way")
+
+    async def test_a_finger_lifting_is_never_held_back_and_what_waited_is_dropped(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        pad.frame([(1, 25.0, 40.0), (2, 45.0, 40.0)])
+        pad.lift()
+        self.assertEqual(len(self.sent), 2, "landing, then lifting, at once")
+        self.assertFalse(pad.touched)
+        await asyncio.sleep(inject.PAD_PACE * 3)
+        self.assertEqual(len(self.sent), 2, "nothing is written after the fingers are up")
 
 
 class Typing(unittest.IsolatedAsyncioTestCase):

@@ -188,6 +188,15 @@ class InStep(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(line.clips(), [])
         await self.leave(s)
 
+    async def test_line_ends_that_read_back_as_they_were_sent_are_not_a_new_copy_either(self):
+        s, line = self.phone()
+        await s.handle({"t": "clip_sync", "on": True})
+        await s.handle({"t": "clip_set", "text": "one\r\ntwo", "quiet": True})
+        self.board = "one\r\ntwo"   # as wl-paste hands it back on Linux
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        await self.leave(s)
+
     async def test_line_ends_that_read_back_plain_are_not_a_new_copy(self):
         s, line = self.phone()
         await s.handle({"t": "clip_sync", "on": True})

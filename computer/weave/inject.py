@@ -14,6 +14,7 @@ before it.
 import asyncio
 import fcntl
 import json
+import math
 import os
 import shutil
 import struct
@@ -37,6 +38,11 @@ UI_SET_ABSBIT, UI_SET_PROPBIT, UI_ABS_SETUP = 0x40045567, 0x4004556E, 0x401C5504
 # The touchpad: far larger than any phone, so the fingers (laid round its middle) never reach
 # the rims, where libinput takes a touch for a palm. Sizes in mm; the kernel gets units.
 PAD_MM, PAD_UNITS_PER_MM, PAD_FINGERS = 240, 20, 5
+# The least time between two frames of the same fingers. The kernel stamps a frame when it is
+# written, and the phone's frames arrive in bunches over Wi-Fi: two a millisecond apart look to
+# libinput like a finger that jumped, and it throws the movement away. A real pad reports every
+# 7 to 12 ms.
+PAD_PACE = 0.008
 
 # Linux key codes by the name the phone sends. Letters and digits sit where QWERTY has them,
 # which holds for the Nordic layouts too, so ctrl+c is ctrl+c.
@@ -146,6 +152,9 @@ class Touchpad:
         self._serial = 0
         self._turned = False
         self._first = None
+        self._wrote = 0.0          # when the last frame went to the kernel
+        self._waiting = None       # the newest fingers held back for the pace, and the timer that writes them
+        self._timer = None
 
     @property
     def touched(self) -> bool:
@@ -156,12 +165,41 @@ class Touchpad:
         [turned] lays two fingers the other way round (both axes), which is what turns the
         scrolling round for a phone that wants it the other way than this desktop's touchpads
         have it. A pinch reads the same either way."""
+        # read whole before anything changes: a frame that makes no sense must not be half laid
         fingers = {int(n): (float(x), float(y)) for n, x, y in list(fingers)[:PAD_FINGERS]}
+        fingers = {n: at for n, at in fingers.items() if math.isfinite(at[0]) and math.isfinite(at[1])}
+        # The same fingers again, too soon after the last frame: kept, and written when its time
+        # comes (only the newest: what lay between is on the way there). A finger landing or
+        # lifting is never held back.
+        left = PAD_PACE - (time.monotonic() - self._wrote)
+        if fingers and set(fingers) == set(self._slots) and left > 0:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop:
+                self._waiting = (fingers, turned)
+                if not self._timer:
+                    self._timer = loop.call_later(left, self._late)
+                return
+        self._waiting = None
+        if self._timer:
+            self._timer.cancel()
+            self._timer = None
+        self._lay(fingers, turned)
+
+    def _late(self):
+        self._timer = None
+        waiting, self._waiting = self._waiting, None
+        if waiting:
+            self._lay(*waiting)
+
+    def _lay(self, fingers: dict, turned: bool):
         if self._slots and self._turned and len(fingers) > 2:
             # A third finger joins two that were laid turned round. Turning is for scrolling
             # only: the desktop's own three- and four-finger swipes go one way whatever
             # scrolling is set to. So the touch starts over, the right way round.
-            self.frame(())
+            self._lay({}, False)
         if not self._slots:
             if not fingers:
                 return
@@ -206,6 +244,7 @@ class Touchpad:
         self._first = first
         if events:
             self.device.emit(*events)
+            self._wrote = time.monotonic()
 
     def lift(self):
         self.frame(())
