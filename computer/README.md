@@ -52,6 +52,10 @@ weave status          what is connected and running
 weave allow | deny    answer a phone waiting to pair
 weave forget [NAME]   unpair a phone, or all of them
 weave clip            send this clipboard to the phone
+weave roam            sound that follows the earbuds: where they are (Linux, a lab)
+weave roam now        hand the earbuds to the phone
+weave roam back       take them back
+weave roam watch      the link's strength as it is read, twice a second
 ```
 
 Settings live in `~/.config/weave/config.json` on Linux and `%APPDATA%\Weave\config.json` on Windows.
@@ -70,6 +74,18 @@ Settings live in `~/.config/weave/config.json` on Linux and `%APPDATA%\Weave\con
 | Keyboard rises when a click lands in a text field | yes | yes |
 | Lock, media keys, wake from sleep | yes | yes |
 | The phone's sound and screen on the computer | yes | not yet |
+| Sound that follows the earbuds to the phone (a lab) | yes | not yet |
+
+## Sound that follows the earbuds
+
+A lab, off until the app turns it on (Settings, Labs). Bluetooth earbuds reach some ten metres from the computer; a phone in your pocket reaches the computer from anywhere. So when the earbuds' link to the computer gets weak, the phone takes them over and plays the computer's sound, and the computer goes silent. Back in reach, the computer takes them back.
+
+- **It needs** PipeWire with its Pulse side (`pactl`, `pw-cli`, `pw-metadata`), BlueZ (`bluetoothctl`, `gdbus`, `busctl`) and `ffmpeg`. No root: the kernel lets any user read a link's strength.
+- **The switch is automatic** when the computer reaches the phone over adb (Developer options, Wireless debugging). Android lets no app connect earbuds, only its shell, so the computer runs a small helper as that shell. Without adb, connect the earbuds in the phone's Bluetooth settings and the sound follows them all the same.
+- **Automatic or manual.** Automatic hands them over when the link gets weak and takes them back when the phone is beside the computer again. Manual moves them only when you say so: in the app's menu under Sound, from the Earbuds tile in the phone's quick settings, or with `weave roam now` and `weave roam back`.
+- **When nobody has them** (out of reach with no phone to take them), what plays on the computer is paused, so it doesn't run on unheard or come out of the speakers of an empty room.
+
+`weave roam watch` shows what the computer reads: the link's strength (0 is fine on most controllers, negative is too weak), how much sound is getting out, and at what point it hands over. The point is Early, Balanced or Late in the app, or `roam.away` and `roam.hold` in the config for a number of your own.
 
 ## How it is built
 

@@ -50,6 +50,7 @@ import com.t3lluz.weave.ui.viewmodel.AppUpdateViewModel
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import com.t3lluz.weave.data.local.SettingsRepository
+import com.t3lluz.weave.roam.RoamPrefs
 import com.t3lluz.weave.ui.components.AiAccessBadge
 import com.t3lluz.weave.ui.components.AiProviderLogo
 import com.t3lluz.weave.ui.components.PillButton
@@ -62,6 +63,7 @@ import com.t3lluz.weave.ui.theme.AppIcons
 import com.t3lluz.weave.ui.theme.Background
 import com.t3lluz.weave.ui.theme.LinkScreenTone
 import com.t3lluz.weave.ui.theme.LinkShortcutTone
+import com.t3lluz.weave.ui.theme.LinkSoundTone
 import com.t3lluz.weave.ui.theme.TextPrimary
 import com.t3lluz.weave.ui.theme.TextSecondary
 import com.t3lluz.weave.ui.theme.TextTertiary
@@ -71,17 +73,19 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor(val settings: SettingsRepository) : ViewModel()
+class SettingsViewModel @Inject constructor(val settings: SettingsRepository, val roam: RoamPrefs) : ViewModel()
 
 /**
  * The app's few settings, as rooms: the dashboard whose bridge the laptops announce themselves
- * to, and the AI that makes shortcuts (Settings → AI).
+ * to, the AI that makes shortcuts (Settings → AI), updates, and what is still being tried out
+ * (Settings → Labs).
  */
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onAi: () -> Unit,
     onUpdates: () -> Unit,
+    onLabs: () -> Unit,
     updates: AppUpdateViewModel,
     viewModel: SettingsViewModel = hiltViewModel(),
     ai: AiSetupViewModel = hiltViewModel(),
@@ -173,6 +177,25 @@ fun SettingsScreen(
                     )
                 }
                 if (ready != null) Box(Modifier.padding(end = 8.dp).size(8.dp).clip(CircleShape).background(UpdateTone))
+                Icon(AppIcons.ChevronRight, null, tint = TextTertiary, modifier = Modifier.size(18.dp))
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        val roam by viewModel.roam.settings.collectAsState()
+        HealthSection(tone = LinkSoundTone, modifier = Modifier.clip(RoundedCornerShape(28.dp)).clickable { haptics.tick(); onLabs() }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(AppIcons.Sparkles, null, tint = LinkSoundTone, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("Labs", style = HealthDisplay, fontSize = 19.sp, color = LinkSoundTone)
+                    }
+                    Text(
+                        "Sound follows your earbuds · ${if (roam.on) "on" else "off"}",
+                        fontSize = 13.sp, color = if (roam.on) TextPrimary else TextSecondary, lineHeight = 18.sp,
+                    )
+                }
                 Icon(AppIcons.ChevronRight, null, tint = TextTertiary, modifier = Modifier.size(18.dp))
             }
         }

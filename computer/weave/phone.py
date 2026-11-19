@@ -48,6 +48,8 @@ class Phone:
         self.mirror_proc = None
         self.audio_proc = None
         self.audio_wanted = False
+        # the phone's sound stays on the phone for now, though it is wanted here (see hold_audio)
+        self.audio_held = False
         self.audio_source = "output"
         self._audio_task = None
         self._looked = -1e9           # when the phone was last searched for over the network
@@ -242,6 +244,19 @@ class Phone:
                 asyncio.create_task(self._watch_calls())
         return "on"
 
+    async def hold_audio(self, held: bool):
+        """Keeps the phone's sound on the phone for a while, without forgetting that it is wanted
+        here. While the phone has the earbuds (roam.py) they are the phone's own output: its
+        sound belongs in them directly, not on a trip to this computer and back. Capturing it
+        would also take it away from them, since Android stops playing what it sends here."""
+        if held == self.audio_held:
+            return
+        self.audio_held = held
+        if held and self.audio_on:
+            self._audio_restart = True   # ended on purpose: not a failure to count
+            self.audio_proc.terminate()
+        self.changed()
+
     async def _stream(self) -> dict | None:
         """scrcpy's playback stream in the laptop's mixer."""
         from .server import run
@@ -335,6 +350,9 @@ class Phone:
         """Runs the sound for as long as it is wanted, through drops, for a few minutes of trying."""
         failures = 0
         while self.audio_wanted:
+            if self.audio_held:
+                await asyncio.sleep(0.5)
+                continue
             serial = await self.find()
             if serial:
                 a = self.cfg["phone_audio"]

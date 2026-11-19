@@ -23,7 +23,7 @@ from . import __version__, discovery, local, pairing
 from .capture import CONFIG, KEY
 from .config import Store, apply_patch, load, settings_of
 from .dashboard import Dashboard
-from .desk import Capture, Injector, Phone, SoundCapture, catalog, hypr, shell
+from .desk import Capture, Injector, Phone, Roam, SoundCapture, catalog, hypr, shell
 from .proc import run
 
 JSON, VIDEO, AUDIO = 1, 2, 3
@@ -119,6 +119,11 @@ class Session:
         self.quiet_steps, self.quiet_since = 0, time.monotonic()
         self.quiet_text = 0
         self.cut = False              # closed from this end for asking more than a quiet line may
+        # a line of the earbuds' way to the phone (roam.py): it carries this computer's sound to
+        # the phone's player and nothing else, beside whatever line the remote has
+        self.roam = False
+        self.roam_kind = ""           # "play": the phone's player. "watch": its screen about the earbuds
+        self.roam_watch = False
         self.wait_until = 0.0         # while it waits to be let in: when the question runs out
         self.local_cursor = False
         # the phone numbers its moves; each pointer report says the last one it already shows,
@@ -515,7 +520,7 @@ class Session:
         """The laptop's sound rides with the picture. With the picture turned off and the sound
         wanted, ffmpeg sends it alone; once the picture is asked for again, that stops (a picture
         that is starting or retrying brings its own sound, and two would play at once)."""
-        want = self.want_audio and not self.closed and not self.video_wanted
+        want = self.want_audio and not self.closed and not self.video_wanted and not self.roam
         if want and not self.sound:
             if time.monotonic() < self.sound_retry_at:
                 return
@@ -763,6 +768,10 @@ class Session:
             # the phone reconnected) would press buttons nobody lets go of
             return
         d, inj, t = self.daemon, self.daemon.injector, msg.get("t")
+        if self.roam:
+            # the sound for the phone's player, and the earbuds' comings and goings: nothing else
+            await d.roam.handle(self, msg)
+            return
         if self.quiet:
             # A line that asked for no "connected" notice runs one shortcut's steps and nothing
             # else: no picture, no sound, no clipboard, no pointer, and not for long. Anything
@@ -939,7 +948,10 @@ class Session:
         if self.clip_task:
             self.clip_task.cancel()
         await self.set_video(False)
-        if self.authorized and not self.replaced:
+        if self.roam:
+            if self.authorized and self.daemon.roam:
+                self.daemon.roam.detach(self)
+        elif self.authorized and not self.replaced:
             self.daemon.sessions.discard(self)
             sync = getattr(self.daemon, "sync_cursor", None)
             if sync:
@@ -976,6 +988,8 @@ class Daemon:
         self.pending: dict[str, tuple[Session, asyncio.Future]] = {}
         self.injector: Injector | None = None
         self.phone = Phone(self.cfg, notify, self.broadcast_state)
+        # sound that follows the earbuds, where this system can do it
+        self.roam = Roam(self) if Roam and Roam.possible() else None
         self.host = socket.gethostname()
         self._focus_task = None
         self.dashboard = Dashboard(self)
@@ -1007,6 +1021,9 @@ class Daemon:
         session.net = str(hello.get("net") or "")[:12]
         session.local_cursor = hello.get("cursor") == "local"
         session.quiet = bool(hello.get("quiet"))
+        roam = getattr(self, "roam", None)
+        session.roam = bool(hello.get("roam")) and roam is not None
+        session.roam_kind = "watch" if hello.get("roam") == "watch" else "play"
         ticket = str(hello.get("ticket") or "")
         if key not in self.devices.data and ticket and secrets.compare_digest(
                 ticket.encode("utf-8", "replace"), self.dashboard.secret.encode("utf-8", "replace")):
@@ -1019,7 +1036,7 @@ class Daemon:
             self.devices.save()
             self.log(f"{session.name} paired with a code")
         if key not in self.devices.data:
-            if session.quiet:
+            if session.quiet or session.roam:
                 # A shortcut run from the home screen never raises the question: nobody is looking
                 # at the phone's remote to see "waiting", and its line is gone a moment later.
                 session.send_json({"t": "pending", "host": self.host})
@@ -1064,6 +1081,19 @@ class Daemon:
                 return False
             self.devices.data[key] = {"name": session.name, "added": int(time.time())}
             self.devices.save()
+        if session.roam:
+            # The phone's player, beside the remote's own line: it takes no session's place and
+            # needs no mouse or keyboard. An older one from the same phone is one it gave up on.
+            for old in [s for s in roam.lines if s.key == key and s.roam_kind == session.roam_kind]:
+                old.replaced = True
+                asyncio.create_task(old.close())
+            session.authorized = True
+            roam.attach(session)
+            session.send_json({"t": "welcome", "host": self.host, "ver": __version__,
+                               "id": str(getattr(self.dashboard, "id", "")), "caps": ["roam"], "roam": roam.status()})
+            self.phone.hints = [f"{session.peer}:5555", *self.phone.hints][:6]
+            print(f"weave: {session.name}'s player connected from {session.peer}")
+            return True
         self.replace_sessions(key)
         session.authorized = True
         self.sessions.add(session)
@@ -1078,7 +1108,9 @@ class Daemon:
             "monitors": monitor_list(mons),
             # what this weave can do beyond the first version, for the phone to offer
             # a touchpad of its own for the phone's fingers, where the system gives one
-            "caps": [*shell.CAPS, *(["touchpad"] if getattr(getattr(self, "injector", None), "pad", None) else [])],
+            "caps": [*shell.CAPS, *(["touchpad"] if getattr(getattr(self, "injector", None), "pad", None) else []),
+                     # the earbuds can go over to the phone when they get out of reach (roam.py)
+                     *(["roam"] if roam else [])],
             # how far the pointer goes per unit of the phone's moves, so the pointer it draws lands exactly
             "gain": await hypr.pointer_gain(),
             # what the phone needs to wake this laptop from sleep on the same network
@@ -1301,6 +1333,10 @@ class Daemon:
             for s in self.sessions:
                 s.send_json({"t": "clip", "text": text[:200_000]})
             return {"ok": True, "msg": "sent the clipboard to the phone"}
+        if cmd == "roam":
+            if not self.roam:
+                return {"ok": False, "msg": "sound that follows the earbuds needs Linux with PipeWire and BlueZ"}
+            return await self.roam.command(req)
         if cmd in ("allow", "deny"):
             return {"ok": True, "msg": self.decide(cmd == "allow", req.get("name"))}
         if cmd == "forget":
@@ -1380,6 +1416,8 @@ class Daemon:
         asyncio.create_task(self._prewarm_catalog())
         asyncio.create_task(shell.prewarm())
         asyncio.create_task(self._keep_cursor_apart())
+        if self.roam:
+            await self.roam.start()
         try:
             async with local_line, link:
                 await stop.wait()
@@ -1388,6 +1426,8 @@ class Daemon:
                 for s in list(self.connections):
                     await s.close()
         finally:
+            if self.roam:
+                await self.roam.close()
             if found:
                 found.close()
             if self.cursor_apart and self.cursor_was is not None:

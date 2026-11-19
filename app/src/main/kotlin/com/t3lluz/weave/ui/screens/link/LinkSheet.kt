@@ -162,6 +162,8 @@ internal fun LinkSheet(
                         Triple(AppIcons.Volume, "Louder", "volup"),
                     ).forEach { (icon, label, command) -> MediaKey(icon, label) { session.media(command) } }
                 }
+                // sound that follows the earbuds, while that lab is on (Settings → Labs)
+                if ("roam" in state.caps) EarbudsRows(laptopName)
             }
 
             HealthSection(tone = LinkHandsTone) {

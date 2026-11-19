@@ -24,6 +24,7 @@ import com.t3lluz.weave.ui.components.AppUpdateSheet
 import com.t3lluz.weave.ui.components.WhatsNewSheet
 import com.t3lluz.weave.ui.screens.link.LinkScreen
 import com.t3lluz.weave.ui.screens.settings.AiSettingsScreen
+import com.t3lluz.weave.ui.screens.settings.LabsScreen
 import com.t3lluz.weave.ui.screens.settings.SettingsScreen
 import com.t3lluz.weave.ui.screens.settings.UpdatesScreen
 import com.t3lluz.weave.ui.theme.AppMotion
@@ -33,8 +34,8 @@ import com.t3lluz.weave.ui.viewmodel.AppUpdateViewModel
 import com.t3lluz.weave.ui.viewmodel.LinkViewModel
 import dagger.hilt.android.AndroidEntryPoint
 
-/** Where the app is: the remote, its settings, Settings → AI, or Settings → Updates. */
-private enum class Place(val depth: Int) { Remote(0), Settings(1), Ai(2), Updates(2) }
+/** Where the app is: the remote, its settings, Settings → AI, Settings → Updates, or Settings → Labs. */
+private enum class Place(val depth: Int) { Remote(0), Settings(1), Ai(2), Updates(2), Labs(2) }
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -61,7 +62,7 @@ class MainActivity : ComponentActivity() {
                 BackHandler(enabled = place != Place.Remote) {
                     place = when (place) {
                         Place.Ai -> aiFrom
-                        Place.Updates -> Place.Settings
+                        Place.Updates, Place.Labs -> Place.Settings
                         else -> Place.Remote
                     }
                 }
@@ -89,10 +90,12 @@ class MainActivity : ComponentActivity() {
                                 onNavigateBack = { place = Place.Remote },
                                 onAi = { aiFrom = Place.Settings; place = Place.Ai },
                                 onUpdates = { place = Place.Updates },
+                                onLabs = { place = Place.Labs },
                                 updates = updates,
                             )
                             Place.Ai -> AiSettingsScreen(onNavigateBack = { place = aiFrom })
                             Place.Updates -> UpdatesScreen(onNavigateBack = { place = Place.Settings }, viewModel = updates)
+                            Place.Labs -> LabsScreen(onNavigateBack = { place = Place.Settings })
                         }
                     }
                     whatsNew?.let { info ->

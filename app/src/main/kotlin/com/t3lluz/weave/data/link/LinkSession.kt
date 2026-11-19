@@ -380,7 +380,10 @@ class LinkSession @Inject constructor(
                     onMessage(JSONObject(String(buffer, 0, size)), ln)
                 }
                 LinkProtocol.VIDEO -> if (size > 9) video.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
-                LinkProtocol.AUDIO -> if (size > 9 && _state.value.laptopSound) audio.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
+                // (not while the earbuds' player has the computer's sound: it would play twice)
+                LinkProtocol.AUDIO -> if (size > 9 && _state.value.laptopSound && !com.t3lluz.weave.roam.RoamHub.playing) {
+                    audio.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
+                }
             }
         }
     }

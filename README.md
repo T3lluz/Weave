@@ -27,6 +27,7 @@
 - **Fold what you don't need:** fold the screen away and the phone is one big trackpad. Fold the shortcuts away and the pad gets their room.
 - **Full screen:** turn the phone on its side and the computer's screen fills it. The controls and your shortcuts sit in one glass panel in the corner, which folds to a single button after a few seconds.
 - **Sound, clipboard, lock and wake:** the computer's sound on the phone, the phone's sound on the computer, media keys, the clipboard both ways or kept in sync, lock, and wake from sleep on the same network.
+- **Sound that follows your earbuds (beta):** walk away from the computer with your earbuds in and the phone takes them over and plays the computer's sound, while the computer goes quiet. Come back and the computer takes them back. Turn it on in Settings, Labs. The computer's side needs Linux.
 - **No account, no cloud:** the phone talks straight to the computer, on your own network or over [Tailscale](https://tailscale.com).
 
 ## Install

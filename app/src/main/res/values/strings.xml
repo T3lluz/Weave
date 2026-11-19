@@ -2,4 +2,5 @@
     <string name="app_name">Weave</string>
     <string name="widget_shortcuts_label">Shortcuts</string>
     <string name="widget_shortcuts_description">Run your shortcuts on the computer from the home screen</string>
+    <string name="roam_tile_label">Earbuds</string>
 </resources>

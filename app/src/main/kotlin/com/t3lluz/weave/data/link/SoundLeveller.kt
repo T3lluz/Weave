@@ -6,11 +6,21 @@ package com.t3lluz.weave.data.link
  * whisper. The level rises slowly while the sound is quiet, until its peaks sit about 3 dB
  * under full scale, and drops at once when something loud comes, so nothing clips.
  */
-internal class SoundLeveller {
-    /** The loudest sample lately. It forgets a loud moment over some ten seconds; silence teaches it nothing. */
-    private var envelope = START_PEAK
+internal class SoundLeveller(
+    /** The most it brings sound up by, as a factor. */
+    private val most: Float = MAX_GAIN,
+    /**
+     * Start from the most and come down, in place of starting low and rising: the earbuds'
+     * player has to be at its level from the first second, not after half a minute of quiet.
+     */
+    fromMost: Boolean = false,
+) {
+    private val floor = TARGET_PEAK / most
 
-    var gain = 1f
+    /** The loudest sample lately. It forgets a loud moment over some ten seconds; silence teaches it nothing. */
+    private var envelope = if (fromMost) floor else START_PEAK
+
+    var gain = if (fromMost) most else 1f
         private set
 
     /** Raises one block of 16-bit samples in place. */
@@ -22,8 +32,8 @@ internal class SoundLeveller {
             if (a > peak) peak = a
         }
         if (peak > envelope) envelope = peak.toFloat() else if (peak > SILENCE) envelope *= ENVELOPE_KEEP
-        if (envelope < FLOOR_PEAK) envelope = FLOOR_PEAK
-        val want = (TARGET_PEAK / envelope).coerceIn(1f, MAX_GAIN)
+        if (envelope < floor) envelope = floor
+        val want = (TARGET_PEAK / envelope).coerceIn(1f, most)
         gain = if (want < gain) want else gain + (want - gain) * 0.05f
         val g = gain
         if (g <= 1.01f) return

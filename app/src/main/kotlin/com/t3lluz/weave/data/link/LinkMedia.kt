@@ -252,8 +252,19 @@ class LinkVideo {
 /** How long the reading thread waits for the screen to grab its still before a switch. */
 private const val SNAPSHOT_WAIT_MS = 120L
 
-/** The laptop's sound on the phone: AAC in, the media stream out. */
-class LinkAudio {
+/**
+ * The laptop's sound on the phone: AAC in, the media stream out. [bufferMs] is what the track
+ * holds, and [startMs] how much it waits for before it starts: the remote keeps both short for
+ * lip sync against Wi-Fi jitter, the earbuds' player ([com.t3lluz.weave.roam.RoamService])
+ * longer, for sound that has to survive a pocket and mobile data.
+ */
+class LinkAudio(
+    private val bufferMs: Int = BUFFER_MS,
+    private val startMs: Int = START_MS,
+    /** The most quiet sound is brought up by, and whether it starts there ([SoundLeveller]). */
+    liftMost: Float = SoundLeveller.MAX_GAIN,
+    liftFromMost: Boolean = false,
+) {
     private var codec: MediaCodec? = null
     private var setup: ByteArray? = null
     private var track: AudioTrack? = null
@@ -261,8 +272,30 @@ class LinkAudio {
 
     /** Bring quiet sound up to a phone's level ([SoundLeveller]); off plays it as it comes. */
     @Volatile var level = true
-    private val leveller = SoundLeveller()
+    private val leveller = SoundLeveller(liftMost, liftFromMost)
+
+    /** How much the sound is being brought up by right now, as a factor. */
+    val lift: Float get() = if (level) leveller.gain else 1f
     private var samples = ShortArray(0)
+
+    /**
+     * The loudest sample played lately (of 32768), for whoever wants to know that something
+     * audible is coming out: it falls back by half in about a second. Counted only when [metered].
+     */
+    @Volatile var peak = 0
+        private set
+    @Volatile var metered = false
+
+    private fun meter(count: Int) {
+        var loudest = 0
+        for (i in 0 until count) {
+            val v = samples[i].toInt()
+            val a = if (v < 0) -v else v
+            if (a > loudest) loudest = a
+        }
+        val fading = peak - (peak shr 6)
+        peak = if (loudest > fading) loudest else fading
+    }
 
     /** Where to play, when it must not follow the phone's own routing; null lets Android choose. */
     var speaker: android.media.AudioDeviceInfo? = null
@@ -299,8 +332,10 @@ class LinkAudio {
                         if (samples.size < count) samples = ShortArray(count)
                         pcm.order(java.nio.ByteOrder.nativeOrder()).asShortBuffer().get(samples, 0, count)
                         if (level) leveller.lift(samples, count)
-                        // Never waits: the track holds a tenth of a second, and what does not fit after a
-                        // hiccup on the network is dropped, so the sound cannot fall behind the picture for good.
+                        if (metered) meter(count)
+                        // Never waits: the track holds a tenth of a second (more for the earbuds' player), and
+                        // what does not fit after a hiccup on the network is dropped, so the sound cannot fall
+                        // behind the picture for good.
                         out.write(samples, 0, count, AudioTrack.WRITE_NON_BLOCKING)
                     }
                     c.releaseOutputBuffer(o, false)
@@ -330,7 +365,7 @@ class LinkAudio {
                 .setAudioFormat(
                     AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build(),
                 )
-                .setBufferSizeInBytes(maxOf(minimum, SAMPLE_RATE * 4 * BUFFER_MS / 1000))
+                .setBufferSizeInBytes(maxOf(minimum, SAMPLE_RATE * 4 * bufferMs / 1000))
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                 .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
@@ -338,7 +373,7 @@ class LinkAudio {
             t.preferredDevice = speaker
             // A track starts playing only once its buffer is full unless told otherwise, which would
             // put the sound a whole buffer behind the picture from the first frame.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) t.setStartThresholdInFrames(SAMPLE_RATE * START_MS / 1000)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) t.setStartThresholdInFrames(SAMPLE_RATE * startMs / 1000)
             t.play()
             codec = c
             track = t

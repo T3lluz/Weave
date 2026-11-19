@@ -69,6 +69,29 @@ The app updates itself from those releases, DailyDash's updater copied over (`da
 
 `widget/` is a Glance widget of shortcuts. `ShortcutsWidgetConfigActivity` picks two to eight for one widget (from Weave's sheet for a new one, where `WidgetPinnedReceiver` puts the picks on the widget once the home screen adds it; from the home screen's widget list; from a widget's edit button). `widgetLayout` splits however many were picked into rows that fill the widget, and sizes the pictures. Gaps are padding, not spacers: Glance allows ten children in a row. A tap goes to `ShortcutRunWorker`, which runs the steps through `LinkOneShot`: the remote's own line when it is up, else a line of its own that says hello with `quiet` (no "connected" notice on the computer), sends the steps at `paceSteps`' pace and hangs up. `WidgetFaces` draws the tiles' pictures as bitmaps. Test it on the emulator against a fake laptop, never by tapping real shortcuts.
 
+## Labs: sound that follows the earbuds
+
+Settings → Labs holds what works but is still being tried out. Fredde's rule (2026-11-19): **Labs has a lab's switch and nothing else.** What a lab can be set to lives where its subject does. The earbuds' settings are rows of the remote's menu, in the sound room (`EarbudsRows`, ui/screens/link/LinkEarbuds.kt), shown while the lab is on.
+
+What it does: earbuds that are the computer's Bluetooth output go over to the phone when their link gets weak, and the phone plays the computer's sound through them; back in reach, the computer takes them back. Read `computer/weave/roam.py`'s header first, then the `roam` package of the app.
+
+- **The computer** (`roam.py`, `btlink.py`): reads the link's strength four times a second from a raw HCI socket (no root: the kernel lets any user send Read RSSI), and `Judge` says when it is weak. `Sink` is a silent output (`weave_roam`, a null sink that dies with its `pw-cli`) that exists whenever the earbuds are the output. `Hand` runs the app's `RoamShell` on the phone over adb. `Nearness` hears the phone's beacon. `Roam` is the states: idle, armed, handing, waiting, bridged, returning.
+- **The phone** (`roam/`): `RoamService` is the player, a foreground service that plays the computer's sound pinned to the earbuds and never to the speaker. `RoamShell` is not part of the running app: the computer starts it as the phone's shell (`app_process`), because only the shell may connect a Bluetooth headset. `RoamReceiver` hears earbuds connect by hand. `RoamLine` is a line to the computer beside the remote's own (hello `"roam": "play"` or `"watch"`); the daemon keeps those apart from sessions, so neither ends the other. `RoamTileService` is the quick settings tile.
+- **The lab keeps its own computer** (`RoamPrefs`): the remote lets go of its computer whenever its list is shown (`LinkViewModel.disconnect` blanks the host), and the player has to find it with Weave closed.
+
+What was measured on t3lluz with AirPods Pro and a Pixel 10, and bit:
+
+- AirPods hold one ordinary device at a time. The phone connecting cuts the computer's link 0.3 s later (reason 0x14). Making the computer present Apple's vendor ID (`DeviceID = bluetooth:004C:0000:0000`, what LibrePods uses for two devices at once) changed nothing: it needs both ends to, and a phone can't without root.
+- The phone takes them in 1 to 2.5 s. The computer taking them back takes 3.5 to 7 s; the phone plays on until they leave it, so the gap either way is under a second.
+- The MT7922 reads 0 at the desk: it says how far outside its good range the earbuds are heard, not dBm. `Roam._scale` tells the two kinds of controller apart.
+- WirePlumber falls back to the output that was picked before, not the one with the highest priority. `Roam._line_up` names the silent output second in that list (through `pw-metadata`, before it exists, so nothing playing is touched), and then the moment the earbuds leave everything plays into it: nothing comes out of the speakers. Sonus's channels follow the default output there by themselves.
+- BlueZ only reports a beacon's strength when it changes. A phone lying still is heard in silence, so "gone" is BlueZ taking it off its list (`InterfacesRemoved`), never the absence of news.
+- The computer's mix arrives 24 to 42 dB under full (Sonus faders at 20 to 40 percent, the AirPods driven at full), and the phone turns it down again with its own media volume (no absolute volume with AirPods: 28 dB at 10 of 25). Left alone that is inaudible. The player's leveller brings it up to a phone's own level from the first block (`SoundLeveller(most = 100f, fromMost = true)`), and the phone's volume keys set the rest.
+- `weave roam` shows what the phone says it is playing ("playing at -3 dB on the phone"): whether sound comes out has an answer without a pair of ears.
+- The player's track holds 100 ms on Wi-Fi. More than that is heard as the sound lagging the picture; Bluetooth's own 0.2 s after the phone can't be helped.
+
+Testing it: `weave roam now` and `weave roam back` move the earbuds for real, so say so before running them while Fredde is listening. To run the automatic path at the desk, set `"roam": {"away": 1}` in the config for one run: the link at 0 then counts as weak, the phone takes them, and the computer takes them back because the phone never left.
+
 ## The computer side
 
 `computer/` is the daemon the app talks to (it began as tandem, a separate repo). One `server.py` for Linux and Windows; `desk.py` picks the system's own modules, and `weave/win/` holds Windows'. Read `computer/README.md` first. Rules that bit:

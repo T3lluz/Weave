@@ -20,6 +20,9 @@ weave clip                        send this clipboard to the phone (the remote m
 weave audio [on|off|toggle]       the phone's sound on this computer's output (Linux)
 weave phone [open|close|toggle]   the phone's screen in a window (Linux)
 weave send FILE...                put files in the phone's Downloads (Linux)
+weave roam [on|off|auto|manual|now|back|watch|early|balanced|late]
+                                  sound that follows the earbuds to the phone (a lab, Linux):
+                                  now hands them to the phone, back takes them back
 weave daemon                      run the daemon in the foreground (the service does this)
 """
 
@@ -95,6 +98,68 @@ def status() -> int:
     return 0
 
 
+STATES = {
+    "off": "off", "idle": "no earbuds are this computer's output", "armed": "the earbuds are here",
+    "handing": "handing them to the phone", "waiting": "they left; waiting to hear who has them",
+    "bridged": "the phone has them and plays this computer's sound", "returning": "taking them back",
+}
+
+
+def roam_line(r: dict) -> str:
+    """What `weave roam watch` prints each time: the link as the daemon reads it."""
+    unit = " dBm" if r.get("dbm") else ""
+    parts = [r["state"]]
+    if r["state"] == "armed":
+        parts.append(f"signal {r.get('raw')}{unit} (smoothed {r.get('signal')}, hands over at {r.get('limit'):g} held {r.get('hold'):g} s)")
+        parts.append(f"sending {r.get('rate')}/s (usual {r.get('usual')})")
+    if r.get("near") is not None:
+        parts.append(f"phone heard at {r['near']} dBm")
+    m = r.get("meter")
+    if m:
+        parts.append(f"phone plays at {m.get('peak')} dB, its volume {m.get('vol')}/{m.get('max')}" + (f" ({m.get('db')} dB)" if m.get("db") is not None else ""))
+    return "  ".join(parts)
+
+
+def roam(args: list[str], popup: bool) -> int:
+    do = (args or ["status"])[0]
+    if do == "watch":
+        try:
+            while True:
+                r = ask({"cmd": "roam", "do": "status"}, timeout=5)
+                if not r.get("ok"):
+                    print(r.get("msg"))
+                    return 1
+                print(time.strftime("%H:%M:%S"), roam_line(r["roam"]), flush=True)
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            print()
+            return 130
+    if do not in ("status", "on", "off", "auto", "manual", "now", "back", "early", "balanced", "late"):
+        print("weave roam [on|off|auto|manual|now|back|watch|early|balanced|late]")
+        return 2
+    reply = ask({"cmd": "roam", "do": do, "probe": do == "status"}, timeout=40)
+    r = reply.get("roam")
+    if not r:
+        return say("Earbuds", reply, popup)
+    if not reply.get("ok"):
+        return say("Earbuds", reply, popup)
+    if do in ("now", "back"):
+        return say("Earbuds", {"ok": True, "msg": "Handing the earbuds to the phone" if do == "now" else "Taking the earbuds back"}, popup)
+    device = r.get("device") or {}
+    how = f"by itself, {r['sens']}" if r.get("mode") != "manual" else "only when asked: weave roam now, weave roam back"
+    print(f"follows    {'on' if r['on'] else 'off'} ({how})")
+    print(f"earbuds    {device.get('name') or 'none'}: {STATES.get(r['state'], r['state'])}" + (f" ({r['why']})" if r.get("why") and r["state"] != "off" else ""))
+    if r["state"] == "armed":
+        unit = " dBm" if r.get("dbm") else ""
+        print(f"signal     {r.get('signal')}{unit}, handed over at {r.get('limit'):g}{unit} held {r.get('hold'):g} s")
+    m = r.get("meter")
+    if m:
+        print(f"playing    at {m.get('peak')} dB on the phone, its volume at {m.get('vol')} of {m.get('max')}" + (f" ({m.get('db')} dB)" if m.get("db") is not None else "")
+              + (f", brought up by {m.get('lift')} dB" if m.get("lift") is not None else ""))
+    print(f"the phone  {'ready to take them' if r['auto'] else 'cannot be told to take them: ' + (r.get('autoWhy') or 'the earbuds are not here')}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="weave", usage=USAGE, add_help=False)
     parser.add_argument("command", nargs="?", default="help")
@@ -132,6 +197,8 @@ def main() -> int:
         return say("Phone", ask({"cmd": "send", "paths": [os.path.abspath(a) for a in args]}, timeout=600), opts.notify)
     if cmd == "clip":
         return say("Phone", ask({"cmd": "clip"}), opts.notify)
+    if cmd == "roam":
+        return roam(args, opts.notify)
     if cmd in ("allow", "deny"):
         return say("Weave", ask({"cmd": cmd, "name": " ".join(args) or None}), opts.notify)
     if cmd == "forget":

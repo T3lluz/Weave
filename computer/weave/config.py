@@ -72,6 +72,14 @@ DEFAULTS = {
     # volume: a phone on silent would send silence, so the sent volume is raised to this share of full
     # when it is muted or very low (the phone's speaker keeps its own level). null leaves it alone.
     "phone_audio": {"buffer_ms": 60, "calls": True, "volume": 0.8, "extra_args": []},
+    # Sound that follows the earbuds (a lab; the phone's app turns it on). When the earbuds' link
+    # to this computer gets weak, the phone takes them and plays this computer's sound.
+    # away, hold: how weak the link may get, and for how many seconds, before the phone takes
+    #   them. null leaves both to the app's Early, Balanced or Late.
+    # near, near_hold: the phone's beacon heard at least this strong (dBm) for this long means
+    #   the earbuds are back in reach, and the computer takes them back.
+    # pause: what plays here is paused when the earbuds are gone and no phone has them.
+    "roam": {"away": None, "hold": None, "near": -70, "near_hold": 4.0, "pause": True},
     # Where files the phone sends land.
     "downloads": str(Path.home() / "Downloads"),
 }

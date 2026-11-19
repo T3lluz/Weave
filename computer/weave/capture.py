@@ -169,15 +169,16 @@ class Capture:
 
 class SoundCapture(Capture):
     """The laptop's sound alone, for while the phone has the picture off: ffmpeg reads what the
-    default output plays (PipeWire's Pulse side) and writes AAC in FLV, so the same reader takes it."""
+    default output plays (PipeWire's Pulse side), or what [source] does, and writes AAC in FLV, so
+    the same reader takes it."""
 
-    def __init__(self, audio_kbps: int, on_audio, on_exit):
+    def __init__(self, audio_kbps: int, on_audio, on_exit, source: str = "@DEFAULT_MONITOR@"):
         super().__init__({"name": "sound", "label": "Sound"}, "sound", "", "", 1, audio_kbps,
                          lambda *_: None, on_audio, on_exit)
         self.args = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-fflags", "nobuffer",
             # 10 ms reads, so the sound isn't held back waiting for a big block
-            "-f", "pulse", "-fragment_size", "3840", "-i", "@DEFAULT_MONITOR@",
+            "-f", "pulse", "-fragment_size", "3840", "-i", source,
             "-c:a", "aac", "-b:a", f"{audio_kbps}k", "-ar", "48000", "-ac", "2",
             "-f", "flv", "-flvflags", "no_duration_filesize", "pipe:1",
         ]

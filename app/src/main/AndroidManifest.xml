@@ -12,6 +12,16 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-permission android:name="android.permission.ENFORCE_UPDATE_OWNERSHIP" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Labs, sound that follows the earbuds: hearing them connect to this phone, and a beacon
+         the computer hears the phone by while it has them -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- and the player that keeps the computer's sound going with the screen off -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- "Tailscale is off": the button that opens it -->
     <queries>
@@ -58,6 +68,38 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Labs: plays the computer's sound through the earbuds while they are on this phone.
+             Exported for the computer's helper, which starts it as the phone's shell a moment
+             before the earbuds connect (roam/RoamShell.kt); DUMP is a permission the shell
+             holds and no other app does, so nothing else can start it. -->
+        <service
+            android:name=".roam.RoamService"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Labs: a tile in quick settings that moves the earbuds to this phone and back -->
+        <service
+            android:name=".roam.RoamTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_roam"
+            android:label="@string/roam_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Labs: the earbuds connected to this phone -->
+        <receiver
+            android:name=".roam.RoamReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
 
