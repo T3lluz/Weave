@@ -360,7 +360,8 @@ fun LinkScreen(
             fetchClipboard = { session.askClipboard() },
             clipSync = { on ->
                 // what is on the phone's clipboard when it is turned on stays put: only what is copied from here on goes over
-                if (on) clips.primaryClipDescription?.let { session.clipSeen = it.timestamp }
+                // (an empty clipboard counts as looked at too: Android empties it after an hour)
+                if (on) session.clipSeen = clips.primaryClipDescription?.timestamp ?: 0L
                 session.setClipSync(on)
                 toast = if (on) "What you copy here or on $laptopName is there on both" else "The clipboards go their own way again"
             },

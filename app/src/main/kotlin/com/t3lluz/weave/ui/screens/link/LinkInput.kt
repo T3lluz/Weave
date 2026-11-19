@@ -108,6 +108,8 @@ fun Modifier.trackpad(
             // the fingers are on the computer's touchpad right now; they were at some point
             var onPad = false
             var usedPad = false
+            // one of them has left where it landed: a stroke, not a tap (asked again each time the fingers come back to two)
+            var strayed = false
             // scroll speed in notches per millisecond, smoothed, for the roll after the fingers lift
             var speedX = 0f
             var speedY = 0f
@@ -136,6 +138,7 @@ fun Modifier.trackpad(
                     if (pressed.size > fingers) fingers = pressed.size
                     if (pressed.size < 2) {
                         landed.clear()
+                        strayed = false
                         // one finger left of several: off the computer's pad, or it would move the pointer there
                         if (onPad) {
                             onPad = false
@@ -163,7 +166,13 @@ fun Modifier.trackpad(
                         val delta = sum / pressed.size.toFloat()
                         scrollTravel += delta
                         if (!scrolled && hypot(scrollTravel.x, scrollTravel.y) > slop) scrolled = true
-                        if (scrolled && nativePad) {
+                        // Any one finger leaving its place counts, not only all of them going the
+                        // same way: in a pinch the fingers part and their middle stays put.
+                        if (!strayed && pressed.any { (it.position - landed.getValue(it.id.value)).getDistance() > slop }) {
+                            strayed = true
+                            scrolled = true
+                        }
+                        if (strayed && nativePad) {
                             if (!onPad) {
                                 // laid down where they landed, so the stroke up to here counts too
                                 onPad = true

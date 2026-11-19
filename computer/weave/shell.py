@@ -26,6 +26,17 @@ async def clip_set(text: str):
     await run("wl-copy", stdin=text.encode())
 
 
+def marked_private(types: str) -> bool:
+    """Whether a clip's list of types says a password manager made it (KeePassXC, Bitwarden and
+    others add this type for clipboard managers to leave the clip alone)."""
+    return any(line.strip() == "x-kde-passwordManagerHint" for line in types.splitlines())
+
+
+async def clip_private() -> bool:
+    """Whether what is copied now is marked as a secret: that is never sent to the phone by itself."""
+    return marked_private(await run("wl-paste", "-l", timeout=2))
+
+
 def notify(title: str, body: str = "", urgency: str = "normal", ms: int = 5000):
     asyncio.create_task(run(
         "notify-send", "-a", "Weave", "-i", "phone", "-u", urgency, "-t", str(ms),

@@ -91,6 +91,10 @@ if WINDOWS:
     user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
     user32.SetClipboardData.restype = wintypes.HANDLE
     user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    user32.RegisterClipboardFormatW.restype = wintypes.UINT
+    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
     kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
     kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
     kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]

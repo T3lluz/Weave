@@ -153,15 +153,21 @@ class Touchpad:
 
     def frame(self, fingers, turned: bool = False):
         """[fingers] are (number, x mm, y mm), all that are on the pad now; none lifts them all.
-        [turned] lays them the other way round (both axes), which is what turns the scrolling
-        round for a phone that wants it the other way than this desktop's touchpads have it."""
+        [turned] lays two fingers the other way round (both axes), which is what turns the
+        scrolling round for a phone that wants it the other way than this desktop's touchpads
+        have it. A pinch reads the same either way."""
         fingers = {int(n): (float(x), float(y)) for n, x, y in list(fingers)[:PAD_FINGERS]}
+        if self._slots and self._turned and len(fingers) > 2:
+            # A third finger joins two that were laid turned round. Turning is for scrolling
+            # only: the desktop's own three- and four-finger swipes go one way whatever
+            # scrolling is set to. So the touch starts over, the right way round.
+            self.frame(())
         if not self._slots:
             if not fingers:
                 return
             # a new touch: its middle goes on the pad's middle
             self._origin = (sum(x for x, _ in fingers.values()) / len(fingers), sum(y for _, y in fingers.values()) / len(fingers))
-            self._turned = turned
+            self._turned = turned and len(fingers) <= 2
         events = []
         before = len(self._slots)
         for number in [n for n in self._slots if n not in fingers]:

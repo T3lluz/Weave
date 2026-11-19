@@ -762,6 +762,23 @@ class FingersOnThePad(unittest.TestCase):
         pad.frame([(1, 30.0, 40.0), (2, 50.0, 40.0)], turned=True)
         self.assertLess(self.last(inject.ABS_X), before, "to the right on the phone, to the left here")
 
+    def test_only_two_fingers_are_ever_turned_and_a_third_starts_the_touch_over(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0), (3, 60.0, 40.0)], turned=True)
+        before = self.last(inject.ABS_X)
+        pad.frame([(1, 30.0, 40.0), (2, 50.0, 40.0), (3, 70.0, 40.0)], turned=True)
+        self.assertGreater(self.last(inject.ABS_X), before, "three fingers go the way they go on the phone")
+        pad.lift()
+        self.sent.clear()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)], turned=True)
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0), (3, 60.0, 40.0)], turned=True)
+        ids = [v for frame in self.sent for t, c, v in frame if c == inject.ABS_MT_TRACKING_ID]
+        self.assertEqual(ids.count(-1), 2, "the two turned fingers are lifted")
+        self.assertEqual(len([i for i in ids if i != -1]), 5, "and all three are laid again")
+        before = self.last(inject.ABS_X)
+        pad.frame([(1, 30.0, 40.0), (2, 50.0, 40.0), (3, 70.0, 40.0)], turned=True)
+        self.assertGreater(self.last(inject.ABS_X), before)
+
     def test_a_stroke_off_the_pad_stops_at_its_rim_and_more_fingers_than_it_has_are_left_out(self):
         inject, pad = self.pad()
         pad.frame([(n, 10.0 * n, 0.0) for n in range(8)])

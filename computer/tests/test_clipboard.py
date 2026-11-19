@@ -40,7 +40,12 @@ class InStep(unittest.IsolatedAsyncioTestCase):
         async def clip_set(text):
             self.board = text
 
-        for name, fake in (("clip_get", clip_get), ("clip_set", clip_set)):
+        self.private = False
+
+        async def clip_private():
+            return self.private
+
+        for name, fake in (("clip_get", clip_get), ("clip_set", clip_set), ("clip_private", clip_private)):
             patch = mock.patch.object(server.shell, name, fake)
             patch.start()
             self.addCleanup(patch.stop)
@@ -191,6 +196,25 @@ class InStep(unittest.IsolatedAsyncioTestCase):
         await self.step()
         self.assertEqual(line.clips(), [])
         await self.leave(s)
+
+    async def test_what_a_password_manager_copied_stays_on_the_computer(self):
+        s, line = self.phone()
+        await s.handle({"t": "clip_sync", "on": True})
+        await self.step()
+        self.board, self.private = "hunter2", True
+        await self.step()
+        self.assertEqual(line.clips(), [])
+        self.assertNotIn("hunter2", self.d.clip_seen.values(), "nor is it kept for a later visit")
+        self.board, self.private = "an ordinary copy", False
+        await self.step()
+        self.assertEqual(line.clips(), ["an ordinary copy"])
+        await self.leave(s)
+
+    def test_the_mark_a_password_manager_leaves(self):
+        from weave import shell
+        self.assertTrue(shell.marked_private("text/plain\nx-kde-passwordManagerHint\nUTF8_STRING\n"))
+        self.assertFalse(shell.marked_private("text/plain\ntext/html\n"))
+        self.assertFalse(shell.marked_private(""))
 
     async def test_turning_it_off_stops_it(self):
         s, line = self.phone()

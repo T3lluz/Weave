@@ -607,6 +607,16 @@ class Session:
             # an image, or nothing at all, isn't text to send; and what the phone sent reads back
             # without its last line break here (wl-paste -n), which is not a new copy
             if text and text.rstrip("\n") != (self.clip_last or "").rstrip("\n"):
+                # what a password manager copied stays on this computer: it is not sent, and
+                # not kept as seen either, so it is looked at again (and passed over) until
+                # something else is copied
+                try:
+                    if await shell.clip_private():
+                        continue
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
                 self._clip_is(text)
                 self.send_json({"t": "clip", "text": text[:200_000], "sync": True})
 
@@ -795,6 +805,8 @@ class Session:
             pad = getattr(inj, "pad", None)
             if pad:
                 fingers = [f for f in (msg.get("f") or [])[:5] if isinstance(f, list) and len(f) == 3]
+                # (only two fingers are ever turned: that is scrolling. Three and four are
+                # the desktop's own swipes, which go one way whatever scrolling is set to.)
                 turned = False
                 if fingers and not pad.touched:
                     turned = bool(msg.get("nat")) != await d.touchpad_natural()

@@ -175,21 +175,33 @@ class LinkSession @Inject constructor(
 
     @Volatile private var wanted = false
     @Volatile private var generation = 0
-    @Volatile private var socket: Socket? = null
-    private val outbox = LinkedBlockingQueue<ByteArray>()
+
+    /**
+     * One connection: its own socket and its own queue of what to send. Each try at connecting
+     * gets a new one, so what is meant for the computer picked now can never be written to the
+     * one picked before, whose thread may still be working through its addresses.
+     */
+    private class Line(val generation: Int) {
+        @Volatile var socket: Socket? = null
+        val outbox = LinkedBlockingQueue<ByteArray>()
+    }
+
+    /** The connection of the computer picked now; what is sent goes to this one only. */
+    @Volatile private var line: Line? = null
+    private val lines = Any()
     private var pingSentAt = 0L
 
     fun start() {
         if (wanted) return
         if (prefs.config.value.host.isBlank()) return
         wanted = true
-        val mine = ++generation
+        val mine = synchronized(lines) { ++generation }
         Thread({ run(mine) }, "link").apply { isDaemon = true }.start()
     }
 
     fun stop() {
         wanted = false
-        generation++
+        synchronized(lines) { generation++ }
         closeSocket()
         video.release()
         audio.stop()
@@ -205,12 +217,17 @@ class LinkSession @Inject constructor(
         start()
     }
 
+    /** Ends the connection of the computer picked now. */
     private fun closeSocket() {
+        val was = synchronized(lines) { line.also { line = null } }
+        close(was)
+    }
+
+    private fun close(ln: Line?) {
         try {
-            socket?.close()
+            ln?.socket?.close()
         } catch (_: IOException) {
         }
-        socket = null
     }
 
     private fun run(mine: Int) {
@@ -222,20 +239,26 @@ class LinkSession @Inject constructor(
             if (st != LinkStatus.Online && st != LinkStatus.Reconnecting) _state.update { it.copy(status = LinkStatus.Connecting) }
             var reason: String? = null
             var writer: Thread? = null
-            var own: Socket? = null
+            // this try's own connection; it becomes the one to send to only while this is still the computer picked
+            val ln = Line(mine)
+            synchronized(lines) {
+                if (generation != mine) return
+                line = ln
+            }
             try {
-                val s = connect(cfg)
+                val s = connect(cfg, ln)
                 // a path that dies before the welcome is given up on in seconds too
                 s.soTimeout = READ_TIMEOUT_MS
-                outbox.clear()
                 val out = s.getOutputStream()
-                writer = Thread({ write(out) }, "link-out").apply { isDaemon = true; start() }
-                sendJson(
-                    JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.key)).put("ticket", cfg.ticket)
-                        .put("name", Build.MODEL).put("ver", 3).put("net", network())
-                        .put("cursor", if (cfg.localPointer) "local" else "laptop"),
+                writer = Thread({ write(out, ln.outbox) }, "link-out").apply { isDaemon = true; start() }
+                // the hello goes on this connection's own queue: its token is this computer's and no other's
+                ln.outbox.offer(
+                    frame(
+                        JSONObject().put("t", "hello").put("token", prefs.tokenFor(cfg.key)).put("ticket", cfg.ticket)
+                            .put("name", Build.MODEL).put("ver", 3).put("net", network())
+                            .put("cursor", if (cfg.localPointer) "local" else "laptop").toString(),
+                    ),
                 )
-                own = s
                 read(DataInputStream(s.getInputStream().buffered(1 shl 16)), mine)
             } catch (e: SocketTimeoutException) {
                 reason = if (_state.value.status == LinkStatus.Online) "The laptop stopped answering." else e.message
@@ -246,11 +269,9 @@ class LinkSession @Inject constructor(
                 // Nothing here may escape: an uncaught exception on this thread would take the whole app down.
                 reason = e.message ?: e.javaClass.simpleName
             } finally {
-                // only this connection's socket: the one after it may be open already
-                if (generation == mine) closeSocket() else try {
-                    own?.close()
-                } catch (_: IOException) {
-                }
+                // only this connection: the one after it may be open already
+                synchronized(lines) { if (line === ln) line = null }
+                close(ln)
                 writer?.interrupt()
                 video.release()
                 audio.stop()
@@ -286,17 +307,23 @@ class LinkSession @Inject constructor(
     }
 
     /** The first of the laptop's addresses that answers. */
-    private fun connect(cfg: LinkConfig): Socket {
+    private fun connect(cfg: LinkConfig, ln: Line): Socket {
         val candidates = cfg.host.split(',').map { it.trim() }.filter { it.isNotEmpty() }
         var last: IOException? = null
         for ((i, address) in candidates.withIndex()) {
+            // another computer was picked while an address was waited on: no more of this one's are tried
+            if (generation != ln.generation) throw IOException("Another computer was picked")
             val s = Socket()
-            socket = s
+            ln.socket = s
             try {
                 s.tcpNoDelay = true
                 s.keepAlive = true
                 // over mobile data the tailnet's first packet can take a few seconds to find its way
                 s.connect(InetSocketAddress(address, cfg.port), if (i == candidates.lastIndex) 7_000 else 5_000)
+                if (generation != ln.generation) {
+                    s.close()
+                    throw IOException("Another computer was picked")
+                }
                 return s
             } catch (e: IOException) {
                 last = e
@@ -309,7 +336,7 @@ class LinkSession @Inject constructor(
         throw last ?: IOException("No address for the laptop")
     }
 
-    private fun write(out: OutputStream) {
+    private fun write(out: OutputStream, outbox: LinkedBlockingQueue<ByteArray>) {
         try {
             while (true) {
                 out.write(outbox.take())
@@ -388,7 +415,7 @@ class LinkSession @Inject constructor(
                 // the laptop asks its owner and says nothing for up to two minutes meanwhile; one
                 // that went to sleep never answers, and Android's keepalive would wait hours
                 try {
-                    socket?.soTimeout = PENDING_TIMEOUT_MS
+                    line?.socket?.soTimeout = PENDING_TIMEOUT_MS
                 } catch (_: IOException) {
                 }
                 _state.update { it.copy(status = LinkStatus.Pending, laptop = m.optString("host")) }
@@ -398,7 +425,7 @@ class LinkSession @Inject constructor(
                 // From here a link that goes quiet (a new network, a laptop that slept) is given up
                 // on in seconds: video and pongs never stop this long on a live one.
                 try {
-                    socket?.soTimeout = READ_TIMEOUT_MS
+                    line?.socket?.soTimeout = READ_TIMEOUT_MS
                 } catch (_: IOException) {
                 }
                 _state.update {
@@ -495,7 +522,9 @@ class LinkSession @Inject constructor(
                 val sync = m.optBoolean("sync")
                 // The two crossed on the way: the laptop sent its copy before the phone's reached it.
                 // The phone's wins there, so it wins here, or each would end with the other's.
-                if (sync && android.os.SystemClock.uptimeMillis() - clipSentAt < CLIP_CROSSED_MS) return
+                // (a relayed link's round trip can be longer than the shortest window)
+                val crossed = maxOf(CLIP_CROSSED_MS, 2L * (_state.value.pingMs ?: 0))
+                if (sync && android.os.SystemClock.uptimeMillis() - clipSentAt < crossed) return
                 // kept, so the phone's copy of it isn't sent straight back
                 if (sync) clipSynced = text
                 _events.tryEmit(LinkEvent.Clipboard(text, sync))
@@ -587,7 +616,12 @@ class LinkSession @Inject constructor(
     // ── out ──
 
     private fun send(json: String) {
-        if (socket == null) return
+        val ln = line ?: return
+        if (ln.socket == null) return
+        ln.outbox.offer(frame(json))
+    }
+
+    private fun frame(json: String): ByteArray {
         val body = json.toByteArray()
         val frame = ByteArray(5 + body.size)
         frame[0] = LinkProtocol.JSON.toByte()
@@ -596,7 +630,7 @@ class LinkSession @Inject constructor(
         frame[3] = (body.size ushr 8).toByte()
         frame[4] = body.size.toByte()
         body.copyInto(frame, 5)
-        outbox.offer(frame)
+        return frame
     }
 
     private fun sendJson(o: JSONObject) = send(o.toString())
