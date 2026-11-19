@@ -12,6 +12,7 @@ const releases = 'https://github.com/T3lluz/Weave/releases/latest';
 const types = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml',
   '.webp': 'image/webp', '.png': 'image/png', '.sh': 'text/plain; charset=utf-8', '.ps1': 'text/plain; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 // pages by their address, without the .html
 const pages = { '/': 'index.html', '/pair': 'pair.html' };

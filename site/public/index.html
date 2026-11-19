@@ -6,38 +6,55 @@
 <title>Weave: your computer, run from your phone</title>
 <meta name="description" content="See your computer's screen on your Android phone and drive it: trackpad, keyboard, shortcuts, sound. For Windows and Linux, on your own network or over Tailscale.">
 <meta name="theme-color" content="#181818">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Weave: your computer, run from your phone">
+<meta property="og:description" content="Its screen at the top of your phone, a trackpad under your thumb, and your phone's own keyboard typing on it. For Windows and Linux.">
+<meta property="og:url" content="https://t3lluz.com/weave/">
+<meta property="og:image" content="https://t3lluz.com/weave/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css">
+<link rel="preload" href="fonts/weave-display.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <main>
-  <div class="top">
-    <img src="icon.svg" alt="">
-    <b>Weave</b>
-    <a class="repo" href="https://github.com/T3lluz/Weave">Source on GitHub</a>
-  </div>
+  <nav class="toprow" aria-label="Weave">
+    <a class="tile grey top-first brand" href="./"><img src="icon.svg" width="30" height="30" alt="">Weave</a>
+    <span class="gap"></span>
+    <a class="tile sky hide-small" href="#computer">Set up</a>
+    <a class="tile grey top-last" href="https://github.com/T3lluz/Weave">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
+      GitHub
+    </a>
+  </nav>
 
-  <div class="hero">
+  <header class="pad" data-weave>
+    <canvas aria-hidden="true"></canvas>
     <div>
-      <h1>Your computer, <span>run from your phone.</span></h1>
+      <h1>Your computer,<br>run from<br>your phone.</h1>
       <p class="lead">Its screen at the top of your phone, a trackpad under your thumb, and your phone's own keyboard typing on it. From the couch, or from anywhere.</p>
-      <div class="buttons">
-        <a class="button main" href="apk">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
+      <div class="dock">
+        <a class="tile tall lit green dock-first" href="apk">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
           Get the Android app
         </a>
-        <a class="button" href="#computer">For your computer</a>
+        <a class="tile tall sky dock-last" href="#computer">For your computer</a>
       </div>
       <p class="note">Android 8 and up. Windows 10 and 11, and Linux with Hyprland. Free and open source.</p>
     </div>
-    <div class="phone"><img src="remote.webp" width="560" height="1257" alt="Weave on a phone: a Windows desktop at the top, a row of shortcuts, and a trackpad below"></div>
-  </div>
+    <div class="phone"><img src="remote.webp?v=2" width="640" height="1436" alt="Weave on a phone: a Windows desktop at the top, a row of shortcuts, and a trackpad below with its two mouse buttons"></div>
+  </header>
 
   <section id="computer">
-    <h2>Set up in three steps</h2>
-    <p class="sub">No account and no cloud in between. The phone talks straight to your computer.</p>
-    <div class="steps">
+    <div class="head">
+      <h2>Set up in three steps</h2>
+      <p>No account and no cloud in between. The phone talks straight to your computer.</p>
+    </div>
+    <div class="room grey steps">
       <div class="step">
+        <div class="n">1</div>
         <h3>Install it on the computer</h3>
         <p>One command. No admin rights needed. It starts with the computer from then on.</p>
         <div class="tabs" role="tablist" aria-label="Your computer's system">
@@ -46,19 +63,21 @@
         </div>
         <div id="for-windows" role="tabpanel" aria-labelledby="tab-windows">
           <div class="command"><code>irm https://t3lluz.com/weave/install.ps1 | iex</code><button class="copy" aria-label="Copy the command"></button></div>
-          <p class="note">Paste it into PowerShell. It brings its own Python and ffmpeg, all in one folder of your own.</p>
+          <p class="small">Paste it into PowerShell. It brings its own Python and ffmpeg, all in one folder of your own.</p>
         </div>
         <div id="for-linux" role="tabpanel" aria-labelledby="tab-linux" hidden>
           <div class="command"><code>curl -fsSL https://t3lluz.com/weave/install.sh | sh</code><button class="copy" aria-label="Copy the command"></button></div>
-          <p class="note">For Hyprland. It needs python3, gpu-screen-recorder, wl-clipboard and wtype.</p>
+          <p class="small">For Hyprland. It needs python3, gpu-screen-recorder, wl-clipboard and wtype.</p>
         </div>
       </div>
       <div class="step">
+        <div class="n">2</div>
         <h3>Get the app</h3>
         <p>Download the APK on your phone and open it. Weave keeps itself up to date after that.</p>
-        <a class="button main" href="apk">Download for Android</a>
+        <a class="tile lit green" href="apk">Download for Android</a>
       </div>
       <div class="step">
+        <div class="n">3</div>
         <h3>Scan the code</h3>
         <p>The installer ends with a code on the computer's screen. Tap <b>Scan a code</b> in the app. Later, <code>weave pair</code> shows a new one.</p>
         <img src="pair.webp" width="977" height="510" loading="lazy" alt="A terminal on Windows showing a QR code under the command weave pair">
@@ -67,72 +86,95 @@
   </section>
 
   <section>
-    <h2>What it does</h2>
-    <p class="sub">Built for a phone held in one hand.</p>
-    <div class="grid">
-      <div class="card"><div class="dot blue"></div><h3>The screen, live</h3><p>Every monitor. Pinch to zoom. The view follows the pointer and slides over when it moves to the next monitor. Turn the phone sideways and the screen fills it.</p></div>
-      <div class="card"><div class="dot green"></div><h3>A trackpad that keeps up</h3><p>The phone draws the pointer itself, so it moves the moment your finger does. Tap to click, hold to drag, two fingers to scroll.</p></div>
-      <div class="card"><div class="dot green"></div><h3>Your phone's keyboard</h3><p>Autocorrect, swipe typing and any language. It comes up by itself when you click into a text field.</p></div>
-      <div class="card wide">
+    <div class="head">
+      <h2>What it does</h2>
+      <p>Built for a phone held in one hand.</p>
+    </div>
+    <div class="rooms">
+      <div class="room sky wide">
         <div>
-          <div class="dot gold"></div>
-          <h3>Shortcuts, also on your home screen</h3>
-          <p>Bring an app to the front, open a page, press keys, type, wait: one step or several in a row. Describe one to Claude ("deafen me on Discord") and it plans the steps and picks the icon. Put two to eight of them in a widget and run them without opening Weave.</p>
+          <p class="room-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Screen</p>
+          <h3>Every monitor, live</h3>
+          <p>Pinch to zoom. The view follows the pointer, and slides over when the pointer crosses to the next monitor.</p>
+          <p><b>On its side, the screen fills the phone.</b> The controls and your shortcuts wait in one glass panel in the corner. It folds itself to a single button after a few seconds.</p>
         </div>
-        <img src="widget.webp" width="500" height="633" loading="lazy" alt="Two Weave widgets on an Android home screen, one with eight shortcuts and one with five">
+        <div class="shot"><div class="phone side"><img src="full.webp?v=2" width="1212" height="540" loading="lazy" alt="Weave full screen on a phone held sideways: a Windows desktop with a green glass panel of controls and shortcuts in the top corner"></div></div>
       </div>
-      <div class="card"><div class="dot orange"></div><h3>Sound</h3><p>Hear what the computer plays, on the phone. Media keys and volume are a tap away.</p></div>
-      <div class="card"><div class="dot violet"></div><h3>One clipboard</h3><p>Copy on one, paste on the other. Send it by hand, or keep the two in step.</p></div>
-      <div class="card"><div class="dot grey"></div><h3>Lock and wake</h3><p>Lock the computer when you leave the room. Wake it from sleep when you're on the same network.</p></div>
+
+      <div class="room green wide flip">
+        <div>
+          <p class="room-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l6.5 16 2.3-6.7L19.5 11 4 4Z"/></svg>Trackpad and keyboard</p>
+          <h3>A trackpad that keeps up</h3>
+          <p>The phone draws the pointer itself, so it moves the moment your finger does. Tap to click, two fingers to scroll, sweep sideways to go back.</p>
+          <p><b>Hold to drag.</b> Once it has hold, any finger can carry it: keep one still and steer with another.</p>
+          <p><b>You can feel it.</b> The pad has a faint grain under your finger, and its buttons click down and up.</p>
+          <p><b>Your phone's own keyboard.</b> Autocorrect, swipe typing and any language. It comes up by itself when you click into a text field.</p>
+        </div>
+        <div class="shot"><div class="phone"><img src="pad.webp?v=2" width="640" height="1436" loading="lazy" alt="Weave with the screen folded away: a grid of shortcuts over a large trackpad, lit green where a held finger is dragging"></div></div>
+      </div>
+
+      <div class="room yellow wide">
+        <div>
+          <p class="room-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3L5 13.500h6L10 21l8-10.500h-6L13 3Z"/></svg>Shortcuts</p>
+          <h3>One tap for what you do all day</h3>
+          <p>Bring an app to the front, open a page, press keys, type, wait: one step or several in a row. A shortcut can flip between two looks, like Deafen and Undeafen.</p>
+          <p><b>Describe one.</b> Tell Claude "deafen me on Discord" and it plans the steps and picks the icon.</p>
+          <p><b>On your home screen.</b> Put two to eight in a widget and run them without opening Weave.</p>
+        </div>
+        <div class="shot widget"><img src="widget.webp?v=2" width="471" height="598" loading="lazy" alt="Two Weave widgets on an Android home screen, one with eight shortcuts and one with five"></div>
+      </div>
+
+      <div class="room orange small">
+        <h3 class="room-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10v4h3.500L12 18V6L7.5 10H4ZM16 9a4 4 0 0 1 0 6M18.5 6.500a8 8 0 0 1 0 11"/></svg>Sound</h3>
+        <p>Hear what the computer plays, on the phone. Media keys and volume are a tap away.</p>
+      </div>
+      <div class="room violet small">
+        <h3 class="room-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2.5"/><path d="M9 5a3 3 0 0 1 6 0M9 12h6M9 16h4"/></svg>Clipboard</h3>
+        <p>Copy on one, paste on the other. Send it by hand, or keep the two in step.</p>
+      </div>
+      <div class="room grey small">
+        <h3 class="room-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Lock and wake</h3>
+        <p>Lock the computer when you leave the room. Wake it from sleep when you're on the same network.</p>
+      </div>
     </div>
   </section>
 
   <section>
-    <h2>Where it works from</h2>
-    <p class="sub">At home, the phone finds the computer on your Wi-Fi. Away, it reaches it over <a href="https://tailscale.com">Tailscale</a>, if both have it. One scan covers both: the code carries every address the computer has.</p>
-    <p class="sub">Weave doesn't encrypt what the two say to each other. Tailscale does. On your own Wi-Fi it is as private as that Wi-Fi. A phone gets in only with a code from the computer's screen, or after you say yes on the computer.</p>
+    <div class="head"><h2>Where it works from</h2></div>
+    <div class="where">
+      <div>
+        <h3>At home and away</h3>
+        <p>At home, the phone finds the computer on your Wi-Fi. Away, it reaches it over <a href="https://tailscale.com">Tailscale</a>, if both have it. One scan covers both: the code carries every address the computer has.</p>
+      </div>
+      <div>
+        <h3>Who can get in</h3>
+        <p>A phone gets in only with a code from the computer's screen, or after you say yes on the computer. Weave doesn't encrypt what the two say to each other. Tailscale does. On your own Wi-Fi it is as private as that Wi-Fi.</p>
+      </div>
+    </div>
   </section>
 
   <section>
-    <h2>Windows and Linux</h2>
-    <p class="sub">The same app talks to both.</p>
-    <table>
-      <tr><th></th><th>Windows</th><th>Linux (Hyprland)</th></tr>
-      <tr><td>Screen, every monitor</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-      <tr><td>Mouse, keyboard, text in any language</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-      <tr><td>The computer's sound on the phone</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-      <tr><td>Clipboard both ways</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-      <tr><td>Apps and their icons for shortcuts</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-      <tr><td>Your key bindings listed for shortcuts</td><td class="no">No</td><td class="yes">Yes</td></tr>
-      <tr><td>The phone's sound on the computer</td><td class="no">Not yet</td><td class="yes">Yes</td></tr>
-    </table>
+    <div class="head">
+      <h2>Windows and Linux</h2>
+      <p>The same app talks to both.</p>
+    </div>
+    <div class="room grey table">
+      <table>
+        <tr><th></th><th>Windows</th><th>Linux (Hyprland)</th></tr>
+        <tr><td>Screen, every monitor</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+        <tr><td>Mouse, keyboard, text in any language</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+        <tr><td>The computer's sound on the phone</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+        <tr><td>Clipboard both ways</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+        <tr><td>Apps and their icons for shortcuts</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+        <tr><td>Pinch, and the desktop's own two-finger gestures</td><td class="no">No</td><td class="yes">Yes</td></tr>
+        <tr><td>Your key bindings listed for shortcuts</td><td class="no">No</td><td class="yes">Yes</td></tr>
+        <tr><td>The phone's sound on the computer</td><td class="no">Not yet</td><td class="yes">Yes</td></tr>
+      </table>
+    </div>
   </section>
 
-  <footer>Weave is made by <a href="https://t3lluz.com/portfolio">Fredde</a>. The code is on <a href="https://github.com/T3lluz/Weave">GitHub</a>.</footer>
+  <footer>Weave is made by <a href="https://t3lluz.com/portfolio">Fredde</a>. The code is on <a href="https://github.com/T3lluz/Weave">GitHub</a>. Set in <a href="fonts/OFL.txt">Google Sans Flex</a>.</footer>
 </main>
-<script>
-// which system's command shows: this one's, to start with
-const tabs = [...document.querySelectorAll('[role=tab]')];
-function pick(tab) {
-  for (const t of tabs) {
-    const on = t === tab;
-    t.setAttribute('aria-selected', on);
-    document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
-  }
-}
-tabs.forEach(t => t.addEventListener('click', () => pick(t)));
-if (/Linux|X11/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent)) pick(document.getElementById('tab-linux'));
-
-const copyIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.500 4H15"/></svg>';
-const doneIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.500"/></svg>';
-for (const button of document.querySelectorAll('.copy')) {
-  button.innerHTML = copyIcon;
-  button.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(button.previousElementSibling.textContent); } catch { return; }
-    button.innerHTML = doneIcon; button.classList.add('done');
-    setTimeout(() => { button.innerHTML = copyIcon; button.classList.remove('done'); }, 1400);
-  });
-}
-</script>
+<script src="weave.js?v=2"></script>
 </body>
 </html>

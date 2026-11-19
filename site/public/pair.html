@@ -7,20 +7,20 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#181818">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
-<div class="pairing">
-  <div class="box">
-    <img src="icon.svg" alt="">
+<main class="pairing">
+  <div class="pad plain">
+    <img src="icon.svg" width="76" height="76" alt="">
     <h1 id="title">Opening Weave</h1>
     <p id="text">This code pairs your phone with a computer. If Weave doesn't open, tap the button.</p>
-    <div class="buttons centered">
-      <a class="button main" id="open" href="./">Open in Weave</a>
-      <a class="button" href="./">Get Weave</a>
+    <div class="dock">
+      <a class="tile tall lit green dock-first" id="open" href="./">Open in Weave</a>
+      <a class="tile tall sky dock-last" id="get" href="./">Get Weave</a>
     </div>
   </div>
-</div>
+</main>
 <script>
 // The invitation is everything after the #. A browser never sends that part to a server, so
 // the code stays between the computer's screen and this phone.
@@ -34,10 +34,12 @@ if (!invite) {
   document.getElementById('title').textContent = 'No code here';
   document.getElementById('text').textContent = 'Run weave pair on your computer and scan the code it shows.';
   open.hidden = true;
+  document.getElementById('get').className = 'tile tall sky';
 } else if (!android) {
   document.getElementById('title').textContent = 'Scan this with your phone';
   document.getElementById('text').textContent = 'This link pairs an Android phone with a computer. Open it on the phone that has Weave, or scan the code with Weave itself.';
   open.hidden = true;
+  document.getElementById('get').className = 'tile tall sky';
 } else {
   // Chrome hands this to the app, or falls back to the download page when Weave isn't installed
   const fallback = encodeURIComponent(new URL('./', location.href).href);
