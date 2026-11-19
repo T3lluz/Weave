@@ -108,15 +108,17 @@ class LinkPrefs @Inject constructor(
     /**
      * The computer just connected to goes to the top of [known]. It takes the place of its own
      * older entry (the same key: its addresses may have changed since), of any other entry at
-     * exactly the same addresses, and of any with the same id of its own (the same computer,
-     * paired again: one machine is one entry).
+     * exactly the same addresses, and of any with the same id of its own that shares an address
+     * with it (the same computer, paired again: one machine is one entry). An id alone takes no
+     * entry's place: a computer can claim any.
      */
     fun remember(cfg: LinkConfig) {
         if (cfg.host.isBlank() || cfg.key.isBlank()) return
         val entry = KnownComputer(cfg.name.ifBlank { cfg.host.substringBefore(',') }, cfg.host, cfg.port, cfg.ticket, cfg.wakeMac, cfg.wakeBroadcast, cfg.key, cfg.board, cfg.ident)
         val next = (
             listOf(entry) + _known.value.filterNot {
-                it.key == entry.key || (it.host == entry.host && it.port == entry.port) || (entry.ident.isNotBlank() && it.ident == entry.ident)
+                it.key == entry.key || (it.host == entry.host && it.port == entry.port) ||
+                    (entry.ident.isNotBlank() && it.ident == entry.ident && it.port == entry.port && sharesAddress(it.host, entry.host))
             }
             ).take(KNOWN_MAX)
         if (next == _known.value) return
@@ -242,6 +244,12 @@ data class KnownComputer(
                 o.optString("board"), o.optString("ident"))
         }
     }
+}
+
+/** Whether two saved lists of addresses ("a,b,c") have one in common. */
+internal fun sharesAddress(one: String, other: String): Boolean {
+    val theirs = other.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    return one.split(',').map { it.trim() }.any { it.isNotEmpty() && it in theirs }
 }
 
 /** The token for one computer: an HMAC of the key the phone gave it, keyed by the phone's secret. */

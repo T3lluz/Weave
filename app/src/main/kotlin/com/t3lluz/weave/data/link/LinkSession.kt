@@ -268,7 +268,7 @@ class LinkSession @Inject constructor(
                 val out = s.getOutputStream()
                 ln.open = true
                 writer = Thread({ write(out, ln.outbox) }, "link-out").apply { isDaemon = true; start() }
-                read(DataInputStream(s.getInputStream().buffered(1 shl 16)), mine)
+                read(DataInputStream(s.getInputStream().buffered(1 shl 16)), ln)
             } catch (e: SocketTimeoutException) {
                 reason = if (_state.value.status == LinkStatus.Online) "The laptop stopped answering." else e.message
             } catch (e: IOException) {
@@ -364,7 +364,8 @@ class LinkSession @Inject constructor(
         }
     }
 
-    private fun read(input: DataInputStream, mine: Int) {
+    private fun read(input: DataInputStream, ln: Line) {
+        val mine = ln.generation
         var buffer = ByteArray(1 shl 16)
         while (true) {
             val kind = input.readUnsignedByte()
@@ -376,7 +377,7 @@ class LinkSession @Inject constructor(
                 LinkProtocol.JSON -> {
                     // a message read just as another computer was picked is not that one's to act on
                     if (generation != mine) throw IOException("Another computer was picked")
-                    onMessage(JSONObject(String(buffer, 0, size)))
+                    onMessage(JSONObject(String(buffer, 0, size)), ln)
                 }
                 LinkProtocol.VIDEO -> if (size > 9) video.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
                 LinkProtocol.AUDIO -> if (size > 9 && _state.value.laptopSound) audio.feed(buffer[0].toInt(), pts(buffer), buffer, 9, size - 9)
@@ -424,7 +425,8 @@ class LinkSession @Inject constructor(
         return v
     }
 
-    private fun onMessage(m: JSONObject) {
+    /** [ln] is the connection the message came in on. */
+    private fun onMessage(m: JSONObject, ln: Line) {
         when (m.optString("t")) {
             "pending" -> {
                 // the laptop asks its owner and says nothing for up to two minutes meanwhile; one
@@ -437,6 +439,9 @@ class LinkSession @Inject constructor(
             }
             "denied" -> _state.update { it.copy(status = LinkStatus.Denied) }
             "welcome" -> {
+                // A welcome read just as another computer was picked is not that one's: it must be
+                // the connection of now, to the computer picked now, or nothing of it is taken.
+                if (ln !== line || ln.key != prefs.config.value.key) return
                 // From here a link that goes quiet (a new network, a laptop that slept) is given up
                 // on in seconds: video and pongs never stop this long on a live one.
                 try {
@@ -466,14 +471,17 @@ class LinkSession @Inject constructor(
                 // what wakes this laptop from sleep, kept for when it is asleep and can't say
                 m.optJSONObject("wake")?.let { w ->
                     val mac = w.optString("mac")
-                    if (mac.isNotBlank()) prefs.update { it.copy(wakeMac = mac, wakeBroadcast = w.optString("brd").takeIf { b -> b != "null" }.orEmpty()) }
+                    // (written only onto the computer this connection is to, should another be picked meanwhile)
+                    if (mac.isNotBlank()) {
+                        prefs.update { if (it.key == ln.key) it.copy(wakeMac = mac, wakeBroadcast = w.optString("brd").takeIf { b -> b != "null" }.orEmpty()) else it }
+                    }
                 }
-                // (a welcome read just as another computer was picked is not that one's: nothing of it is kept)
-                if (line?.key != prefs.config.value.key) return
-                // its own id, for knowing it again when a code for it is scanned
-                m.optString("id").take(64).let { id -> if (id.isNotBlank()) prefs.update { it.copy(ident = id) } }
+                // Its own id, for knowing it again when a code for it is scanned. Only the computer's
+                // own word counts, said here; one that says none has none, whatever a code claimed.
+                val id = m.optString("id").take(64)
+                prefs.update { if (it.key == ln.key) it.copy(ident = id) else it }
                 // let in: this computer is one of the phone's own from now on, listed without a dashboard
-                prefs.remember(prefs.config.value)
+                prefs.config.value.takeIf { it.key == ln.key }?.let(prefs::remember)
                 ping()
             }
             "video" -> {

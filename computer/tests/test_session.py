@@ -853,6 +853,20 @@ class FingersInBunches(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([v for t, c, v in self.sent[2][1] if c == inject.ABS_MT_TRACKING_ID], [-1, -1])
         self.assertFalse(pad.touched)
 
+    async def test_a_new_touch_right_behind_a_lift_does_not_run_into_the_old_one(self):
+        inject, pad = self.pad()
+        pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])
+        pad.frame([(1, 25.0, 40.0), (2, 45.0, 40.0)])
+        pad.frame(())
+        pad.frame([(7, 60.0, 80.0), (8, 80.0, 80.0)])     # new fingers, in the same bunch
+        await asyncio.sleep(inject.PAD_PACE * 3)
+        keys = [(c, v) for _, frame in self.sent for t, c, v in frame if t == inject.EV_KEY and c == inject.BTN_TOUCH]
+        self.assertEqual(keys, [(inject.BTN_TOUCH, 1), (inject.BTN_TOUCH, 0), (inject.BTN_TOUCH, 1)], "down, up, down again")
+        middle = inject.PAD_MM / 2 * inject.PAD_UNITS_PER_MM
+        xs = [v for t, c, v in self.sent[-1][1] if c == inject.ABS_MT_POSITION_X]
+        self.assertEqual(sum(xs) / 2, middle, "and the new touch is laid round the middle, as any is")
+        pad.lift()
+
     async def test_a_phone_that_is_gone_lifts_the_fingers_at_once(self):
         inject, pad = self.pad()
         pad.frame([(1, 20.0, 40.0), (2, 40.0, 40.0)])

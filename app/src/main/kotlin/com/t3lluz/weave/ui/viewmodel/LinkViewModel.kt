@@ -157,36 +157,52 @@ class LinkViewModel @Inject constructor(
     var alreadyPaired by mutableStateOf<com.t3lluz.weave.data.link.KnownComputer?>(null)
         private set
 
+    /** The code that was scanned for [alreadyPaired]: shown to that computer as it is saved, in case it has forgotten this phone. */
+    private var alreadyCode = ""
+
     fun offer(invite: com.t3lluz.weave.data.link.LinkInvite) {
         // the picked computer counts too, while it still waits to be let in
         val cfg = prefs.config.value
         val picked = com.t3lluz.weave.data.link.KnownComputer(cfg.name, cfg.host, cfg.port, key = cfg.key, ident = cfg.ident)
             .takeIf { cfg.host.isNotBlank() && prefs.known.value.none { k -> k.key == cfg.key } }
         val known = com.t3lluz.weave.data.link.alreadyKnown(invite, prefs.known.value + listOfNotNull(picked))
-        if (known != null) alreadyPaired = known else offered = invite
+        if (known != null) {
+            alreadyPaired = known
+            alreadyCode = invite.code
+        } else {
+            offered = invite
+        }
     }
 
     fun dismissAlreadyPaired() {
         alreadyPaired = null
+        alreadyCode = ""
     }
 
     /** Whether [computer] is the one this phone is connected to right now. */
     fun isConnectedTo(computer: com.t3lluz.weave.data.link.KnownComputer): Boolean =
         prefs.config.value.key == computer.key && session.state.value.status == com.t3lluz.weave.data.link.LinkStatus.Online
 
-    /** Connects to the computer a scanned code turned out to be for, as it is saved. */
+    /**
+     * Connects to the computer a scanned code turned out to be for, as it is saved: its saved
+     * addresses and its key, never the code's addresses. The code goes along as the ticket, so
+     * a computer that has forgotten this phone (or hasn't let it in yet) lets it in without
+     * asking its owner again. It goes only to the computer the phone already had.
+     */
     fun connectAlreadyPaired() {
         val k = alreadyPaired ?: return
-        alreadyPaired = null
+        val code = alreadyCode
+        dismissAlreadyPaired()
         if (isConnectedTo(k)) return
         if (prefs.config.value.key == k.key) {
+            if (code.isNotBlank()) prefs.update { if (it.key == k.key) it.copy(ticket = code) else it }
             session.reconnect()
             return
         }
         connectTo(
             LinkHost(
                 id = "known:${k.key}", name = k.name, addresses = k.host.split(',').map { it.trim() }.filter { it.isNotEmpty() },
-                port = k.port, ticket = k.ticket, online = true, busy = false, key = k.key, board = k.board,
+                port = k.port, ticket = code.ifBlank { k.ticket }, online = true, busy = false, key = k.key, board = k.board,
             ),
         )
     }
@@ -223,7 +239,8 @@ class LinkViewModel @Inject constructor(
         // computer must never go to an address a code brought
         prefs.update {
             it.copy(host = invite.addresses.joinToString(","), port = invite.port, name = invite.name, ticket = invite.code,
-                key = prefs.newKey(), board = "", ident = invite.id, wakeMac = "", wakeBroadcast = "")
+                // (its own id comes from its own welcome, not from the code: a code can claim any)
+                key = prefs.newKey(), board = "", ident = "", wakeMac = "", wakeBroadcast = "")
         }
         session.reconnect()
     }

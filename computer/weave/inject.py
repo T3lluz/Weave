@@ -177,6 +177,12 @@ class Touchpad:
         # places: what lay between is on the way there). The fingers lifting waits for what is
         # kept to be written first, so the end of a stroke, which is what a program measures a
         # flick by, is not lost; it goes right behind it.
+        if fingers and self._lift_after:
+            # a new touch right behind a lift that is still waiting: the old one ends first (where
+            # it got to, then up), or the two would run together as one
+            if self._timer:
+                self._timer.cancel()
+            self._late()
         left = PAD_PACE - (time.monotonic() - self._wrote)
         if left > 0 and (fingers or self._waiting):
             try:

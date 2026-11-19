@@ -826,7 +826,7 @@ private fun AlreadyPaired(name: String, connected: Boolean, onConnect: () -> Uni
             Column {
                 Text(
                     if (connected) "This phone is using it right now. There is nothing to pair."
-                    else "This phone has it already, so the code wasn't used. You can connect to it as it is.",
+                    else "This phone has it already, so it isn't added a second time. You can connect to it as it is saved.",
                     fontSize = 14.sp, lineHeight = 20.sp,
                 )
                 Spacer(Modifier.height(10.dp))

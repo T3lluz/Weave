@@ -136,6 +136,13 @@ class LinkInviteTest {
     }
 
     @Test
+    fun savedAddressesShareOneOrDoNot() {
+        assertTrue(sharesAddress("192.168.1.23, 100.64.0.10", "100.64.0.10,box"))
+        assertFalse(sharesAddress("192.168.1.23", "192.168.1.24"))
+        assertFalse(sharesAddress("", ""))
+    }
+
+    @Test
     fun anInvitationCarriesTheComputersId() {
         assertEquals("a1b2c3", parseInvite("weave://pair?n=box&a=192.168.1.23&p=47600&c=abc&i=a1b2c3")?.id)
         assertEquals("", parseInvite("weave://pair?n=box&a=192.168.1.23&p=47600&c=abc")?.id)
