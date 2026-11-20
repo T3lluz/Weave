@@ -3,7 +3,6 @@ package com.t3lluz.weave.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -15,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -32,6 +30,7 @@ import com.t3lluz.weave.ui.theme.Primary
 import com.t3lluz.weave.ui.theme.Surface
 import com.t3lluz.weave.ui.theme.TextPrimary
 import com.t3lluz.weave.ui.theme.TextSecondary
+import com.t3lluz.weave.ui.screens.health.pressSink
 import com.t3lluz.weave.ui.util.rememberHaptics
 
 private val PillShape = RoundedCornerShape(999.dp)
@@ -58,6 +57,8 @@ fun PillButton(
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
+            // it gives under the finger as the tiles do, and the taller tap area with it
+            .pressSink(interactionSource, 0.94f)
             .heightIn(min = 40.dp)
             .clickable(
                 interactionSource = interactionSource,
@@ -75,8 +76,6 @@ fun PillButton(
                 .clip(PillShape)
                 .background(if (emphasized) accent.copy(alpha = 0.16f) else Surface)
                 .border(1.dp, if (emphasized) accent.copy(alpha = 0.38f) else Border, PillShape)
-                // The press ripple stays inside the pill, not the taller tap area.
-                .indication(interactionSource, ripple())
                 .padding(horizontal = 13.dp, vertical = 8.dp),
         ) {
             Icon(

@@ -26,15 +26,18 @@ import dev.chrisbanes.haze.hazeEffect
 
 /**
  * The app's frosted glass, as iOS drew its materials before Liquid Glass: the page behind
- * blurred smooth and washed with one flat tint. No sheen, no grain, no gradients. It replaced
- * 2.0's dotted frost (a dot grid perforating the glass), which read as noise on a phone.
+ * blurred and washed with one flat tint. No sheen, no grain, no gradients. It replaced 2.0's
+ * dotted frost (a dot grid perforating the glass), which read as noise on a phone.
  */
 object GlassSpec {
-    /** How far the page behind is blurred. */
-    val Blur: Dp = 30.dp
+    /**
+     * How far the page behind is blurred. Light enough that the shapes behind still show through
+     * as shapes: Fredde found 30 dp read as fog over the laptop's picture (2026-11-20).
+     */
+    val Blur: Dp = 14.dp
 
     /** The chrome's tint: dark, so white text reads over any page, but see-through. */
-    val ChromeTint: Color = Color(0xFF0B0B0D).copy(alpha = 0.62f)
+    val ChromeTint: Color = Color(0xFF0B0B0D).copy(alpha = 0.58f)
 
     /**
      * Under the blurred copy of the page. The navbar's source (the whole NavHost) is opaque, but
@@ -52,12 +55,12 @@ object GlassSpec {
         Triple(1.dp, 4.dp, Color(0x2E000000)),
     )
 
-    /** A faint neutral edge, so the glass keeps its outline over the app's own dark pages. */
+    /** A faint light edge, where glass catches the light, so it keeps its outline over a dark picture. */
     val OutlineWidth: Dp = 1.dp
-    val OutlineColor: Color = Color.White.copy(alpha = 0.06f)
+    val OutlineColor: Color = Color.White.copy(alpha = 0.11f)
 }
 
-/** The heavy blur is sampled at this scale; at this radius it looks the same and costs a quarter. */
+/** The blur is sampled at this scale; at this radius it looks the same and costs a quarter. */
 private const val INPUT_SCALE = 0.5f
 
 /**
@@ -94,7 +97,7 @@ fun Modifier.glass(
 fun Modifier.chromeGlass(
     hazeState: HazeState?,
     shape: Shape,
-    /** The glass's wash: the chrome's dark, or a colour of its own (the full-screen panel's mint). */
+    /** The glass's wash: the chrome's dark, or a colour of its own. */
     tint: Color = GlassSpec.ChromeTint,
     outline: Color = GlassSpec.OutlineColor,
 ): Modifier = this

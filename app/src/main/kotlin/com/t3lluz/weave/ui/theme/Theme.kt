@@ -1,7 +1,9 @@
 package com.t3lluz.weave.ui.theme
 
 import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -13,6 +15,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.t3lluz.weave.ui.util.openUrl
 
@@ -99,6 +102,12 @@ private val AppTypography = Typography(
     ),
 )
 
+/**
+ * Material's own corners where its parts are used. Menus read the smallest one, 4 dp by
+ * default, which looked like a sharp box beside the app's tiles (14 dp) and rooms (28 dp).
+ */
+private val AppShapes = Shapes(extraSmall = RoundedCornerShape(16.dp))
+
 @Composable
 fun WeaveTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
@@ -114,6 +123,7 @@ fun WeaveTheme(content: @Composable () -> Unit) {
         MaterialTheme(
             colorScheme = DarkColorScheme,
             typography = AppTypography,
+            shapes = AppShapes,
             content = content,
         )
     }

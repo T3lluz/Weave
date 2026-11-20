@@ -5,7 +5,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.t3lluz.weave.data.link.LinkSession
 import com.t3lluz.weave.widget.ShortcutsWidgetConfigActivity
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +57,7 @@ import com.t3lluz.weave.ui.screens.health.HealthDisplay
 import com.t3lluz.weave.ui.screens.health.HealthSection
 import com.t3lluz.weave.ui.theme.AppIcons
 import com.t3lluz.weave.ui.theme.Background
+import com.t3lluz.weave.ui.theme.LinkClipboardTone
 import com.t3lluz.weave.ui.theme.LinkHandsTone
 import com.t3lluz.weave.ui.theme.LinkScreenTone
 import com.t3lluz.weave.ui.theme.LinkShortcutTone
@@ -148,11 +154,8 @@ internal fun LinkSheet(
 
             HealthSection(tone = LinkSoundTone) {
                 RoomTitle(AppIcons.Volume, "Sound", LinkSoundTone)
-                ToggleRow("Hear $laptopName here", "It keeps playing there too", state.laptopSound, LinkSoundTone) { actions.laptopSound(!state.laptopSound) }
-                ToggleRow("Make quiet sound louder", "Lifts a laptop mixed for headphones", config.levelSound, LinkSoundTone) { session.setLevelSound(!config.levelSound) }
-                ToggleRow("Play this phone's sound there", "This phone's speaker goes quiet meanwhile", state.phoneAudio, LinkSoundTone) { actions.phoneAudio(!state.phoneAudio) }
-                Spacer(Modifier.height(10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                // the keys first: they are what a hand comes here for most
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     listOf(
                         Triple(AppIcons.SkipBack, "Previous", "prev"),
                         Triple(AppIcons.Play, "Play or pause", "play"),
@@ -162,6 +165,16 @@ internal fun LinkSheet(
                         Triple(AppIcons.Volume, "Louder", "volup"),
                     ).forEach { (icon, label, command) -> MediaKey(icon, label) { session.media(command) } }
                 }
+                ToggleRow("Hear $laptopName here", "It keeps playing there too", state.laptopSound, LinkSoundTone) { actions.laptopSound(!state.laptopSound) }
+                // only matters while it plays here
+                AnimatedVisibility(
+                    visible = state.laptopSound,
+                    enter = expandVertically(AppMotion.slideTween()) + fadeIn(AppMotion.fadeTween()),
+                    exit = shrinkVertically(AppMotion.slideTween()) + fadeOut(AppMotion.fadeTween()),
+                ) {
+                    ToggleRow("Make quiet sound louder", "Lifts a laptop mixed for headphones", config.levelSound, LinkSoundTone) { session.setLevelSound(!config.levelSound) }
+                }
+                ToggleRow("Play this phone's sound there", "This phone's speaker goes quiet meanwhile", state.phoneAudio, LinkSoundTone) { actions.phoneAudio(!state.phoneAudio) }
                 // sound that follows the earbuds, while that lab is on (Settings → Labs)
                 if ("roam" in state.caps) EarbudsRows(laptopName)
             }
@@ -211,14 +224,19 @@ internal fun LinkSheet(
                 }
             }
 
-            HealthSection(tone = TextSecondary) {
+            // the clipboard in its own colour, as its tile in the dock
+            HealthSection(tone = LinkClipboardTone) {
+                RoomTitle(AppIcons.ClipboardSwap, "Clipboard", LinkClipboardTone)
                 if (LinkSession.CLIP_SYNC in state.caps) {
-                    ToggleRow("Keep the clipboards in sync", "Copy on either one, paste on the other", config.clipSync, TextSecondary) {
+                    ToggleRow("Keep the clipboards in sync", "Copy on either one, paste on the other", config.clipSync, LinkClipboardTone) {
                         actions.clipSync(!config.clipSync)
                     }
                 }
-                ActionRow(AppIcons.ClipboardPaste, "Copy what's copied on $laptopName", TextSecondary) { onDismiss(); actions.fetchClipboard() }
-                ActionRow(AppIcons.ClipboardCopy, "Send what's copied here to $laptopName", TextSecondary) { onDismiss(); actions.sendClipboard() }
+                ActionRow(AppIcons.ClipboardPaste, "Copy what's copied on $laptopName", LinkClipboardTone) { onDismiss(); actions.fetchClipboard() }
+                ActionRow(AppIcons.ClipboardCopy, "Send what's copied here to $laptopName", LinkClipboardTone) { onDismiss(); actions.sendClipboard() }
+            }
+
+            HealthSection(tone = TextSecondary) {
                 ActionRow(AppIcons.Lock, "Lock $laptopName", TextSecondary) { onDismiss(); session.lock() }
                 ActionRow(AppIcons.Settings, "Weave's settings", TextSecondary) { onDismiss(); onSettings() }
             }

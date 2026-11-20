@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -92,7 +93,6 @@ import com.t3lluz.weave.data.link.LinkStatus
 import com.t3lluz.weave.ui.components.BackTile
 import com.t3lluz.weave.ui.components.IconTile
 import com.t3lluz.weave.ui.components.TileRow
-import androidx.compose.ui.graphics.lerp
 import com.t3lluz.weave.ui.components.chromeGlass
 import com.t3lluz.weave.ui.screens.ai.MenuRow
 import com.t3lluz.weave.ui.theme.AppIcons
@@ -210,7 +210,8 @@ fun LinkScreen(
     BackHandler {
         when {
             arranging -> arranging = false
-            landscape && viewModel.orientation == 1 -> viewModel.orientation = 2
+            // on its side, back is the way out of full screen, however the phone got there
+            landscape && online -> viewModel.orientation = 2
             online -> {
                 val now = android.os.SystemClock.uptimeMillis()
                 if (now - backSaidAt > BACK_SAYS_EVERY_MS) {
@@ -743,17 +744,16 @@ private fun Upright(
 }
 
 /**
- * The full-screen panel's glass, in the hands' mint: folded to its handle it is a circle, a
- * bubble [PANEL_BUBBLE] across, and unfolded it keeps those corners. It rests [PANEL_INSET] in
- * from the screen's edges, so in a corner it sits inside a phone's own rounded corner instead of
- * running into it, and [HOLE_GAP] clear of the camera.
+ * The full-screen panel rests [PANEL_INSET] in from the screen's edges, so in a corner it sits
+ * inside a phone's own rounded corner instead of running into it, and [HOLE_GAP] clear of the
+ * camera. Its shape and measures are in LinkPanel.kt.
  */
-private val PanelShape = RoundedCornerShape(28.dp)
-private val PANEL_PAD = 5.dp
-private val PANEL_BUBBLE = PANEL_HANDLE + PANEL_PAD * 2
 private val PANEL_INSET = 16.dp
 private val HOLE_GAP = 6.dp
-private val PanelTint = lerp(Color(0xFF0B0B0D), LinkHandsTone, 0.4f).copy(alpha = 0.74f)
+
+/** The glass the keys sit on in full screen: a key is 6 dp in from its edge, and its corner 12. */
+private val KEYS_PAD = 6.dp
+private val KeysShape = RoundedCornerShape(18.dp)
 
 /** The camera's holes in the screen, in px of the window, which the picture runs under on its side. */
 @Composable
@@ -855,10 +855,21 @@ private fun Sideways(
 
         // The controls and the shortcuts: one glass panel that unfolds from its handle, wherever
         // on the screen's edges the handle was left, into the room there is from there.
+        var holding by remember { mutableStateOf(false) }
         PanelStack(
             Modifier
                 .panelPlace(
                     place, floor = { ime.getBottom(density) + keys },
+                    onTap = {
+                        haptics.tick()
+                        open = !open
+                    },
+                    // held, the handle offers the way out: felt as it does, and let go there to take it
+                    onHolding = { on ->
+                        if (on) haptics.thresholdActivate()
+                        holding = on
+                    },
+                    onLeave = onUpright,
                     onGrab = {
                         haptics.grab()
                         open = false
@@ -868,36 +879,44 @@ private fun Sideways(
                         viewModel.panelSpot = it
                     },
                 )
-                .chromeGlass(hazeState, PanelShape, tint = PanelTint, outline = LinkHandsTone.copy(alpha = 0.22f))
+                .chromeGlass(hazeState, PanelShape)
                 // it grows from its handle: the handle stays put and in view, and the rest is uncovered from it
                 .animateContentSize(AppMotion.Link.panel(), alignment = place.corner)
                 .padding(PANEL_PAD),
             shelfAbove = place.up,
             controls = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // the handle is at the end the bubble is at: the controls unfold away from the screen's edge
-                    if (!place.left) PanelHandle(open) { open = !open }
-                    if (open) {
-                        val touch = viewModel.touchMode
-                        if (touchable) {
-                            PanelButton(0, if (touch) AppIcons.Scan else AppIcons.MousePointer, if (touch) "Touch" else "Trackpad", LinkHandsTone, on = touch) {
+                // From the handle out: the way out of full screen first, under the thumb that opened
+                // the panel, then the hands, the sound and the media keys. The same order whichever
+                // end of the panel the handle is at, so the controls unfold away from the screen's edge.
+                val touch = viewModel.touchMode
+                val controls: List<Pair<String, @Composable () -> Unit>> = buildList {
+                    add("exit" to @Composable { PanelButton(0, AppIcons.Minimize, "Exit") { onUpright() } })
+                    add("line1" to @Composable { PanelDivider() })
+                    if (touchable) {
+                        add("touch" to @Composable {
+                            PanelButton(1, if (touch) AppIcons.Scan else AppIcons.MousePointer, if (touch) "Touch" else "Trackpad", LinkHandsTone, on = touch, switch = true) {
                                 used++
                                 viewModel.touchMode = !touch
                             }
-                        }
-                        PanelButton(1, AppIcons.Keyboard, "Keyboard", LinkHandsTone, on = imeVisible) { used++; onKeyboard() }
-                        PanelButton(2, if (state.laptopSound) AppIcons.LaptopSound else AppIcons.LaptopSoundOff, "Sound", LinkSoundTone, on = state.laptopSound) {
+                        })
+                    }
+                    add("keyboard" to @Composable { PanelButton(2, AppIcons.Keyboard, "Keyboard", LinkHandsTone, on = imeVisible, switch = true) { used++; onKeyboard() } })
+                    add("sound" to @Composable {
+                        PanelButton(3, if (state.laptopSound) AppIcons.LaptopSound else AppIcons.LaptopSoundOff, "Sound", LinkSoundTone, on = state.laptopSound, switch = true) {
                             used++
                             actions.laptopSound(!state.laptopSound)
                         }
-                        PanelDivider()
-                        PanelButton(3, AppIcons.Play, "Play") { used++; session.media("play") }
-                        PanelButton(4, AppIcons.VolumeLow, "Quieter") { used++; session.media("voldown") }
-                        PanelButton(5, AppIcons.Volume, "Louder") { used++; session.media("volup") }
-                        PanelDivider()
-                        PanelButton(6, AppIcons.Minimize, "Exit") { onUpright() }
-                    }
-                    if (place.left) PanelHandle(open) { open = !open }
+                    })
+                    add("line2" to @Composable { PanelDivider() })
+                    add("play" to @Composable { PanelButton(4, AppIcons.Play, "Play") { used++; session.media("play") } })
+                    add("quieter" to @Composable { PanelButton(5, AppIcons.VolumeLow, "Quieter") { used++; session.media("voldown") } })
+                    add("louder" to @Composable { PanelButton(6, AppIcons.Volume, "Louder") { used++; session.media("volup") } })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val handle = @Composable { PanelHandle(open, holding, onClick = { open = !open }, onLeave = onUpright) }
+                    if (!place.left) handle()
+                    if (open) (if (place.left) controls.asReversed() else controls).forEach { (name, control) -> key(name) { control() } }
+                    if (place.left) handle()
                 }
             },
             // out of the way while typing, as upright: the keyboard leaves room for one row
@@ -912,8 +931,9 @@ private fun Sideways(
             exit = slideOutVertically(AppMotion.slideTween()) { it } + fadeOut(AppMotion.fadeTween()),
             modifier = Modifier.align(Alignment.BottomCenter).imePadding(),
         ) {
-            Box(Modifier.onSizeChanged { keysHeight = it.height }.padding(horizontal = 12.dp, vertical = 6.dp).chromeGlass(hazeState, RoundedCornerShape(18.dp))) {
-                KeyRow(mods, LinkHandsTone, onMods, onKey)
+            Box(Modifier.onSizeChanged { keysHeight = it.height }.padding(horizontal = 12.dp, vertical = 6.dp).chromeGlass(hazeState, KeysShape)) {
+                // as far in from the glass's sides as from its top: a key's corner follows the glass's
+                KeyRow(mods, LinkHandsTone, onMods, onKey, side = KEYS_PAD)
             }
         }
     }

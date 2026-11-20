@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.t3lluz.weave.ui.components.TileRow
 import com.t3lluz.weave.ui.components.SubScreenHeader
 import com.t3lluz.weave.ui.components.subScreenBottomPadding
 import com.t3lluz.weave.ui.screens.health.HealthDisplay
@@ -67,7 +68,7 @@ fun LabsScreen(onNavigateBack: () -> Unit, viewModel: RoamViewModel = hiltViewMo
             .fillMaxSize()
             .background(Background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = TileRow.Side)
             .subScreenBottomPadding(),
     ) {
         SubScreenHeader(title = "Labs", onNavigateBack = onNavigateBack)

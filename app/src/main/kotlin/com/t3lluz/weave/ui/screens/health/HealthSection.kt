@@ -1,6 +1,11 @@
 package com.t3lluz.weave.ui.screens.health
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.remember
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import com.t3lluz.weave.ui.util.rememberHaptics
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.padding
@@ -36,13 +41,16 @@ private val RoomShape = RoundedCornerShape(28.dp)
 
 /**
  * One Health section. With a [tone] it is a room in that colour; without one it is the
- * plain card Home uses (a loading or empty state that has no subject yet).
+ * plain card Home uses (a loading or empty state that has no subject yet). A room with an
+ * [onClick] opens something: it gives a little under the finger, inside its own corners, and
+ * ticks.
  */
 @Composable
 fun HealthSection(
     modifier: Modifier = Modifier,
     delayMs: Long = 0L,
     tone: Color? = null,
+    onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (tone == null) {
@@ -50,18 +58,34 @@ fun HealthSection(
         return
     }
     val fill = roomColor(tone)
+    val haptics = rememberHaptics()
+    val source = remember { MutableInteractionSource() }
     CompositionLocalProvider(LocalRoomColor provides fill) {
         Column(
             modifier = modifier
                 .fillMaxWidth()
                 .padding(vertical = 6.dp)
+                .then(if (onClick != null) Modifier.pressSink(source, ROOM_DEPTH) else Modifier)
                 .clip(RoomShape)
                 .background(fill)
+                .then(
+                    if (onClick != null) {
+                        Modifier.clickable(interactionSource = source, indication = null, role = Role.Button) {
+                            haptics.tick()
+                            onClick()
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
                 .padding(horizontal = 18.dp, vertical = 18.dp),
             content = content,
         )
     }
 }
+
+/** How far a room that opens something gives: a room is wide, so a little. */
+private const val ROOM_DEPTH = 0.975f
 
 /**
  * A section's header as Apple Health writes it: the icon and the name in the category's

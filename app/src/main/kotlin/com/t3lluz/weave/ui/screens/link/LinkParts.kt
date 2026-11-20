@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -88,17 +89,20 @@ internal fun shortLabel(label: String?, name: String?): String =
 /**
  * Gives a little under the finger and springs back; the scale is read in the layer, never in
  * composition. Turned off ([enabled] false), it neither gives nor ticks, and reads as off. A
- * switch hands in the state it is in ([on]) and says under the finger which way it went.
+ * switch hands in the state it is in ([on]) and says under the finger which way it went. A
+ * button gives to [depth]; a row as wide as its room gives much less ([ROW_DEPTH]).
  */
 @Composable
 internal fun Modifier.pressable(label: String, onClick: () -> Unit): Modifier = pressable(label, enabled = true, onClick = onClick)
 
 @Composable
-internal fun Modifier.pressable(label: String, enabled: Boolean, on: Boolean? = null, onClick: () -> Unit): Modifier {
+internal fun Modifier.pressable(
+    label: String, enabled: Boolean, on: Boolean? = null, depth: Float = AppMotion.Link.PRESSED_SCALE, onClick: () -> Unit,
+): Modifier {
     val haptics = rememberHaptics()
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
-    val scale = animateFloatAsState(if (pressed) AppMotion.Link.PRESSED_SCALE else 1f, AppMotion.Link.press(), label = "press")
+    val scale = animateFloatAsState(if (pressed) depth else 1f, AppMotion.Link.press(), label = "press")
     return this
         .graphicsLayer {
             scaleX = scale.value
@@ -177,12 +181,18 @@ internal fun DockTile(
     IconTile(icon, label, tone, shape, modifier, on, switch, TileRow.DockHeight, onClick)
 }
 
-/** A control of the full-screen panel. Each arrives a beat after the one before it. */
+/**
+ * A control of the full-screen panel. Each arrives a beat after the one before it. It is as
+ * tall as the handle and takes the panel's inner corner, so lit it is a pill that runs round
+ * the panel's own curve. Its words are white: the glass is clear enough that grey would sink
+ * into a bright picture behind it.
+ */
 @Composable
-internal fun PanelButton(index: Int, icon: ImageVector, label: String, tone: Color = TextPrimary, on: Boolean = false, onClick: () -> Unit) {
+internal fun PanelButton(index: Int, icon: ImageVector, label: String, tone: Color = TextPrimary, on: Boolean = false, switch: Boolean = false, onClick: () -> Unit) {
     val arrived = remember { Animatable(0f) }
     LaunchedEffect(Unit) { arrived.animateTo(1f, AppMotion.Link.arrive(index)) }
-    val fill by animateColorAsState(if (on) tone.copy(alpha = 0.24f) else Color.Transparent, AppMotion.colorTween(), label = "panel")
+    val fill by animateColorAsState(if (on) tone.copy(alpha = 0.26f) else Color.Transparent, AppMotion.colorTween(), label = "panel")
+    val ink by animateColorAsState(if (on) tone else TextPrimary, AppMotion.colorTween(), label = "panelInk")
     Column(
         Modifier
             .graphicsLayer {
@@ -191,22 +201,22 @@ internal fun PanelButton(index: Int, icon: ImageVector, label: String, tone: Col
                 scaleX = s
                 scaleY = s
             }
-            .pressable(label, onClick)
-            .width(PANEL_BUTTON)
-            .clip(RoundedCornerShape(20.dp))
-            .background(fill)
-            .padding(vertical = 7.dp),
+            .pressable(label, enabled = true, on = on.takeIf { switch }, onClick = onClick)
+            .size(PANEL_BUTTON, PANEL_HANDLE)
+            .clip(PanelInnerShape)
+            .background(fill),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
-        Icon(icon, null, tint = if (on) tone else TextPrimary, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = ink, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(3.dp))
-        Text(label, color = if (on) tone else TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(label, color = ink, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
 @Composable
 internal fun PanelDivider() {
-    Box(Modifier.padding(horizontal = (PANEL_DIVIDER - 1.dp) / 2).size(width = 1.dp, height = 26.dp).background(Color.White.copy(alpha = 0.1f)))
+    Box(Modifier.padding(horizontal = (PANEL_DIVIDER - 1.dp) / 2).size(width = 1.dp, height = 26.dp).background(Color.White.copy(alpha = 0.14f)))
 }
 
 /** How wide a control and a line between them are: the panel's width is known from them before it is unfolded. */
@@ -235,14 +245,18 @@ internal fun LinkToast(message: String?, hazeState: HazeState?, modifier: Modifi
     }
 }
 
-/** The keys a phone keyboard lacks, over it. Ctrl, alt, super and shift wait for the next key. */
+/**
+ * The keys a phone keyboard lacks, over it. Ctrl, alt, super and shift wait for the next key.
+ * [side]: in from the screen's edge as the trackpad and the dock are, upright; on the glass in
+ * full screen, as far in as from its top, so a key's corner follows the glass's.
+ */
 @Composable
-internal fun KeyRow(mods: Set<String>, tone: Color, onMods: (Set<String>) -> Unit, onKey: (String) -> Unit) {
+internal fun KeyRow(mods: Set<String>, tone: Color, onMods: (Set<String>) -> Unit, onKey: (String) -> Unit, side: Dp = TileRow.Side) {
     Row(
         Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = side, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -285,15 +299,16 @@ private fun KeyChip(label: String, tone: Color, on: Boolean = false, switch: Boo
     }
 }
 
+/** How far a row as wide as its room gives under the finger: a button's give would jump. */
+internal const val ROW_DEPTH = 0.97f
+
 /** A row of a room that is a switch: what it does, one short line on what that means, and the switch in the room's colour. */
 @Composable
 internal fun ToggleRow(title: String, sub: String?, on: Boolean, tone: Color, onClick: () -> Unit) {
-    val haptics = rememberHaptics()
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(role = Role.Switch) { if (on) haptics.toggleOff() else haptics.toggleOn(); onClick() }
+            .pressable(title, enabled = true, on = on, depth = ROW_DEPTH, onClick = onClick)
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -316,7 +331,7 @@ internal fun ToggleRow(title: String, sub: String?, on: Boolean, tone: Color, on
 @Composable
 internal fun ActionRow(icon: ImageVector, title: String, tone: Color, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).pressable(title, onClick).padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().pressable(title, enabled = true, depth = ROW_DEPTH, onClick = onClick).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(34.dp).clip(CircleShape).background(tone.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
@@ -360,7 +375,11 @@ internal fun <T> Segmented(options: List<Pair<T, String>>, picked: T, tone: Colo
                         .weight(1f)
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(50))
-                        .clickable(role = Role.RadioButton) { haptics.tick(); onPick(value) },
+                        // the highlight sliding over is the answer: no ripple on top of it
+                        .clickable(interactionSource = null, indication = null, role = Role.RadioButton) {
+                            if (i != index) haptics.tick()
+                            onPick(value)
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(

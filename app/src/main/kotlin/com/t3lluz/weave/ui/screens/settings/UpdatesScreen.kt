@@ -1,5 +1,6 @@
 package com.t3lluz.weave.ui.screens.settings
 
+import com.t3lluz.weave.ui.util.rememberHaptics
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -42,6 +43,7 @@ import com.t3lluz.weave.data.update.AppUpdateUiState
 import com.t3lluz.weave.data.update.info
 import com.t3lluz.weave.data.update.prettyVersion
 import com.t3lluz.weave.data.update.updateAvailable
+import com.t3lluz.weave.ui.components.TileRow
 import com.t3lluz.weave.ui.components.LoadingSpinner
 import com.t3lluz.weave.ui.components.NotesText
 import com.t3lluz.weave.ui.components.PillButton
@@ -89,7 +91,7 @@ fun UpdatesScreen(onNavigateBack: () -> Unit, viewModel: AppUpdateViewModel) {
             .fillMaxSize()
             .background(Background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = TileRow.Side)
             .subScreenBottomPadding(),
     ) {
         SubScreenHeader(title = "Updates", subtitle = "Weave ${viewModel.currentVersionName} on this phone", onNavigateBack = onNavigateBack)
@@ -125,13 +127,14 @@ fun UpdatesScreen(onNavigateBack: () -> Unit, viewModel: AppUpdateViewModel) {
             notes.isEmpty() -> Text("No releases to show yet.", color = TextTertiary, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp))
             else -> {
                 var all by remember { mutableStateOf(false) }
+                val haptics = rememberHaptics()
                 (if (all) notes else notes.take(3)).forEach { ReleaseRoom(it) }
                 if (notes.size > 3) {
                     Row(
                         Modifier
                             .align(Alignment.CenterHorizontally)
                             .clip(CircleShape)
-                            .clickable { all = !all }
+                            .clickable { if (all) haptics.toggleOff() else haptics.toggleOn(); all = !all }
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {

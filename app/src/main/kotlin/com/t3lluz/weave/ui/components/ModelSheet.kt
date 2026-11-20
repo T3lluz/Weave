@@ -248,11 +248,12 @@ private fun ModelRow(m: AiModel, on: Boolean, small: Boolean = false, onClick: (
 /** "Older Opus", a fold under a line's newest version. */
 @Composable
 private fun OlderFold(line: String, count: Int, open: Boolean, onToggle: () -> Unit) {
+    val haptics = rememberHaptics()
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onToggle)
+            .clickable { if (open) haptics.toggleOff() else haptics.toggleOn(); onToggle() }
             .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

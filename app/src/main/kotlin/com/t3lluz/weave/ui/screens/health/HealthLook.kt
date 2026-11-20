@@ -153,13 +153,14 @@ private val LoadingWidths = listOf(0.44f, 1f, 0.8f, 0.62f)
 
 /**
  * A tile that gives a little under a finger: it sinks a touch while pressed and springs
- * back, read in the draw phase. Share [source] with the tile's `clickable`.
+ * back, read in the draw phase. Share [source] with the tile's `clickable`. [depth] is the
+ * scale it sinks to: a wide row gives less than a tile.
  */
 @Composable
-fun Modifier.pressSink(source: MutableInteractionSource): Modifier {
+fun Modifier.pressSink(source: MutableInteractionSource, depth: Float = 0.955f): Modifier {
     val pressed by source.collectIsPressedAsState()
     val scale = animateFloatAsState(
-        targetValue = if (pressed) 0.955f else 1f,
+        targetValue = if (pressed) depth else 1f,
         animationSpec = AppMotion.pressSpring(),
         label = "pressSink",
     )

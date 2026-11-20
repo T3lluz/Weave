@@ -1,7 +1,9 @@
 package com.t3lluz.weave.roam
 
 import com.t3lluz.weave.data.link.SoundLeveller
-import com.t3lluz.weave.ui.screens.link.strength
+import com.t3lluz.weave.ui.screens.link.Buds
+import com.t3lluz.weave.ui.screens.link.budsFrom
+import com.t3lluz.weave.ui.screens.link.linkLevel
 import com.t3lluz.weave.ui.screens.link.whereTheyAre
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
@@ -107,21 +109,31 @@ class RoamLogicTest {
     @Test
     fun `where the earbuds are is said in a sentence`() {
         val armed = RoamStatus(on = true, state = "armed")
-        assertEquals("On t3lluz.", whereTheyAre(armed, RoamPlayer(), "t3lluz", online = true))
-        assertEquals("On this phone, playing t3lluz's sound.", whereTheyAre(armed, RoamPlayer(running = true, playing = true), "t3lluz", online = true))
+        assertEquals("Playing on t3lluz.", whereTheyAre(armed, RoamPlayer(), "t3lluz", online = true))
+        assertEquals("Playing t3lluz's sound here.", whereTheyAre(armed, RoamPlayer(running = true, playing = true), "t3lluz", online = true))
         assertEquals("Asking t3lluz…", whereTheyAre(null, RoamPlayer(), "t3lluz", online = false))
-        assertEquals("On their way back to t3lluz.", whereTheyAre(armed.copy(state = "returning"), RoamPlayer(), "t3lluz", online = true))
+        assertEquals("On their way back to t3lluz…", whereTheyAre(armed.copy(state = "returning"), RoamPlayer(), "t3lluz", online = true))
     }
 
     @Test
-    fun `the link's strength is said only while the earbuds are on the computer`() {
+    fun `the switch lights the side the earbuds are on, and the one they are going to`() {
+        val armed = RoamStatus(on = true, state = "armed")
+        assertEquals(Buds.COMPUTER, budsFrom(armed, RoamPlayer()))
+        assertEquals(Buds.PHONE, budsFrom(armed, RoamPlayer(running = true, playing = true)))
+        assertEquals(Buds.TO_PHONE, budsFrom(armed.copy(state = "handing"), RoamPlayer()))
+        assertEquals(Buds.TO_COMPUTER, budsFrom(armed.copy(state = "returning"), RoamPlayer()))
+        assertEquals(Buds.NEITHER, budsFrom(armed.copy(state = "idle"), RoamPlayer()))
+        assertEquals(Buds.NEITHER, budsFrom(null, RoamPlayer()))
+    }
+
+    @Test
+    fun `the link's strength is shown only while the earbuds are on the computer`() {
         val armed = RoamStatus(on = true, state = "armed", signal = 0.0, limit = -8.0)
-        assertEquals("Link strong (0). The phone takes over at -8.", strength(armed))
-        assertEquals("Link getting weak (-6). The phone takes over at -8.", strength(armed.copy(signal = -6.0)))
-        assertEquals("Link weak (-9). The phone takes over at -8.", strength(armed.copy(signal = -9.0)))
-        assertEquals("by hand, no point is named", "Link strong (0).", strength(armed.copy(mode = "manual")))
-        assertEquals("Link strong (-50 dBm). The phone takes over at -72 dBm.", strength(armed.copy(signal = -50.0, limit = -72.0, dbm = true)))
-        assertNull(strength(armed.copy(state = "bridged")))
-        assertNull(strength(armed.copy(signal = null)))
+        assertEquals(1f, linkLevel(armed)!!, 0.001f)
+        assertEquals(0.25f, linkLevel(armed.copy(signal = -6.0))!!, 0.001f)
+        assertEquals(0f, linkLevel(armed.copy(signal = -9.0))!!, 0.001f)
+        assertEquals("22 dB over the limit, of 24", 22f / 24f, linkLevel(armed.copy(signal = -50.0, limit = -72.0, dbm = true))!!, 0.001f)
+        assertNull(linkLevel(armed.copy(state = "bridged")))
+        assertNull(linkLevel(armed.copy(signal = null)))
     }
 }

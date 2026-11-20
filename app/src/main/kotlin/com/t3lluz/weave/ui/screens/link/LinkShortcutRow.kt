@@ -74,6 +74,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -604,6 +605,8 @@ internal fun ShortcutTile(
     s: LinkShortcut, store: LinkShortcutStore, icons: Int, fx: TileFx, picture: ImageBitmap? = null, glass: Boolean = false,
     /** Its steps are on their way to the laptop: the tile breathes in its colour until the last has gone. */
     busy: Boolean = false,
+    /** Its corners: the shelf's, or the full-screen panel's inner curve. */
+    shape: Shape = TileShape,
 ) {
     val glyph = s.shownGlyph
     val lit = s.toggle != null && s.on
@@ -625,7 +628,7 @@ internal fun ShortcutTile(
                     scaleX = k
                     scaleY = k
                 }
-                .clip(TileShape)
+                .clip(shape)
                 .drawBehind {
                     drawRect(fill)
                     if (lit) drawRect(tone.copy(alpha = 0.24f))

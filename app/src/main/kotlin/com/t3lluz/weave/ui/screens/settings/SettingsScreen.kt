@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import com.t3lluz.weave.data.local.SettingsRepository
 import com.t3lluz.weave.roam.RoamPrefs
+import com.t3lluz.weave.ui.components.TileRow
 import com.t3lluz.weave.ui.components.AiAccessBadge
 import com.t3lluz.weave.ui.components.AiProviderLogo
 import com.t3lluz.weave.ui.components.PillButton
@@ -59,6 +60,7 @@ import com.t3lluz.weave.ui.components.SubScreenHeader
 import com.t3lluz.weave.ui.components.subScreenBottomPadding
 import com.t3lluz.weave.ui.screens.health.HealthDisplay
 import com.t3lluz.weave.ui.screens.health.HealthSection
+import com.t3lluz.weave.ui.screens.link.RoomTitle
 import com.t3lluz.weave.ui.theme.AppIcons
 import com.t3lluz.weave.ui.theme.Background
 import com.t3lluz.weave.ui.theme.LinkScreenTone
@@ -109,22 +111,17 @@ fun SettingsScreen(
             .background(Background)
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = TileRow.Side)
             .subScreenBottomPadding(),
     ) {
         SubScreenHeader(title = "Settings", onNavigateBack = onNavigateBack)
         Spacer(Modifier.height(10.dp))
 
         HealthSection(tone = LinkScreenTone) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(AppIcons.Server, null, tint = LinkScreenTone, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(7.dp))
-                Text("Dashboard", style = HealthDisplay, fontSize = 19.sp, color = LinkScreenTone)
-            }
-            Spacer(Modifier.height(4.dp))
+            RoomTitle(AppIcons.Server, "Dashboard", LinkScreenTone)
             Text(
-                "Laptops running tandem announce themselves here, so they show up without typing an address. " +
-                    "The first time this phone connects, the laptop asks you once.",
+                "Computers running Weave announce themselves here, so they show up without typing an address. " +
+                    "The first time this phone connects, the computer asks you once.",
                 fontSize = 13.sp, color = TextSecondary, lineHeight = 18.sp,
             )
             Spacer(Modifier.height(14.dp))
@@ -143,7 +140,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(6.dp))
         val claude = aiState.current
-        HealthSection(tone = LinkShortcutTone, modifier = Modifier.clip(RoundedCornerShape(28.dp)).clickable { haptics.tick(); onAi() }) {
+        HealthSection(tone = LinkShortcutTone, onClick = onAi) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (claude != null) AiProviderLogo(claude.provider, 40.dp)
                 Spacer(Modifier.width(12.dp))
@@ -163,7 +160,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(6.dp))
         val updateState by updates.state.collectAsState()
         val ready = updateState.info?.takeIf { updateState.updateAvailable }
-        HealthSection(tone = UpdateTone, modifier = Modifier.clip(RoundedCornerShape(28.dp)).clickable { haptics.tick(); onUpdates() }) {
+        HealthSection(tone = UpdateTone, onClick = onUpdates) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -183,7 +180,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(6.dp))
         val roam by viewModel.roam.settings.collectAsState()
-        HealthSection(tone = LinkSoundTone, modifier = Modifier.clip(RoundedCornerShape(28.dp)).clickable { haptics.tick(); onLabs() }) {
+        HealthSection(tone = LinkSoundTone, onClick = onLabs) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -202,7 +199,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(20.dp))
         Text(
-            "The laptop's side is tandem. Screen, sound and touches go straight between the two over Tailscale.",
+            "The computer's side is Weave's own small server. Screen, sound and touches go straight between the two, over your network or Tailscale.",
             fontSize = 12.sp, color = TextTertiary, lineHeight = 16.sp,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp).align(Alignment.CenterHorizontally),
         )

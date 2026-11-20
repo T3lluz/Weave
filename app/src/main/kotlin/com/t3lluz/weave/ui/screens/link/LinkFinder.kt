@@ -166,12 +166,12 @@ internal fun LinkFinder(
         // the top row's last tile, where the remote has its own: the same grid on every screen
         IconTile(
             AppIcons.Settings, "Settings", TextSecondary, TileRow.TopLast,
-            Modifier.align(Alignment.End).padding(end = 16.dp, top = 6.dp).width(TileRow.TopTile),
+            Modifier.align(Alignment.End).padding(end = TileRow.Side, top = 6.dp).width(TileRow.TopTile),
             onClick = onSettings,
         )
         Column(
             // (a computer removed, or one that turns up, moves the rest over; it doesn't jump)
-            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).animateContentSize(AppMotion.entranceSpring()),
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = TileRow.Side).animateContentSize(AppMotion.entranceSpring()),
         ) {
             Spacer(Modifier.height(18.dp))
             AnimatedContent(

@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -35,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -46,12 +49,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -60,6 +66,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.t3lluz.weave.data.link.LinkShortcut
 import com.t3lluz.weave.data.link.LinkShortcutStore
+import com.t3lluz.weave.ui.theme.AppIcons
 import com.t3lluz.weave.ui.theme.AppMotion
 import com.t3lluz.weave.ui.theme.TextPrimary
 import com.t3lluz.weave.ui.util.rememberHaptics
@@ -168,13 +175,19 @@ internal class PanelPlace(val field: PanelField, start: Offset) {
 }
 
 /**
- * Puts the panel where its bubble is, its handle's corner on the bubble, and lets the handle
- * carry it: dragged, it follows the finger; let go, it goes to the nearest edge ([onDrop] gets
- * the place to keep). A panel too big for the room it has is moved onto the screen, and clear
- * of what covers the foot of it ([floor], px: the keyboard); one too big for the screen keeps
- * its handle's end on it. Goes before the panel's glass.
+ * Puts the panel where its bubble is, its handle's corner on the bubble, and gives the handle
+ * all its gestures. A tap opens or folds the panel ([onTap]). Dragged, it follows the finger;
+ * let go, it goes to the nearest edge ([onDrop] gets the place to keep). Held still, it offers
+ * the way out of full screen ([onHolding] says while it does), and let go there it takes it
+ * ([onLeave]); moved instead, it is a drag after all. A panel too big for the room it has is
+ * moved onto the screen, and clear of what covers the foot of it ([floor], px: the keyboard);
+ * one too big for the screen keeps its handle's end on it. Goes before the panel's glass.
  */
-internal fun Modifier.panelPlace(place: PanelPlace, floor: () -> Int, onGrab: () -> Unit, onDrop: (Pair<Float, Float>) -> Unit): Modifier = this
+internal fun Modifier.panelPlace(
+    place: PanelPlace, floor: () -> Int,
+    onTap: () -> Unit, onHolding: (Boolean) -> Unit, onLeave: () -> Unit,
+    onGrab: () -> Unit, onDrop: (Pair<Float, Float>) -> Unit,
+): Modifier = this
     .layout { measurable, constraints ->
         val field = place.field
         val inset = field.inset.roundToInt()
@@ -199,18 +212,39 @@ internal fun Modifier.panelPlace(place: PanelPlace, floor: () -> Int, onGrab: ()
             val scope = this
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                // only the handle carries it: the buttons beside it are for pressing
+                // only the handle: the buttons beside it are for pressing
                 val across = if (place.left) size.width - down.position.x else down.position.x
                 val along = if (place.up) size.height - down.position.y else down.position.y
                 if (across > place.field.bubble || along > place.field.bubble) return@awaitEachGesture
                 var at = place.spot.value
-                val first = awaitTouchSlopOrCancellation(down.id) { change, over ->
+                val follow = { change: PointerInputChange, over: Offset ->
                     change.consume()
                     at = place.field.within(at + over)
-                } ?: return@awaitEachGesture
+                }
+                // lifted before the hold takes: a tap; moved: a drag; neither: it is held
+                var first: PointerInputChange? = null
+                val quick = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    first = awaitTouchSlopOrCancellation(down.id, follow)
+                    true
+                }
+                if (quick == true && first == null) {
+                    onTap()
+                    return@awaitEachGesture
+                }
+                if (quick == null) {
+                    onHolding(true)
+                    first = awaitTouchSlopOrCancellation(down.id, follow)
+                    onHolding(false)
+                    if (first == null) {
+                        // let go where it was held (and not taken by anything else): out of full screen
+                        if (currentEvent.changes.none { it.isConsumed }) onLeave()
+                        return@awaitEachGesture
+                    }
+                }
+                val start = first ?: return@awaitEachGesture
                 onGrab()
                 scope.launch { place.spot.snapTo(at) }
-                drag(first.id) { change ->
+                drag(start.id) { change ->
                     at = place.field.within(at + change.positionChange())
                     change.consume()
                     scope.launch { place.spot.snapTo(at) }
@@ -252,16 +286,31 @@ internal fun PanelStack(modifier: Modifier = Modifier, shelfAbove: Boolean = fal
 /**
  * Folds the panel away to this one button, and opens it again. Folded, it is four tiles: what
  * is behind it, controls and shortcuts. Opening, the tiles stretch into the arms of a cross.
+ * [holding], it turns into the way out of full screen. It is only drawn here: the panel takes
+ * its tap, hold and drag ([panelPlace]); [onClick] and [onLeave] are for screen readers.
  */
 @Composable
-internal fun PanelHandle(open: Boolean, onClick: () -> Unit) {
+internal fun PanelHandle(open: Boolean, holding: Boolean, onClick: () -> Unit, onLeave: () -> Unit) {
     val turn = animateFloatAsState(if (open) 1f else 0f, AppMotion.Link.panel(), label = "handle")
+    val leave = animateFloatAsState(if (holding) 1f else 0f, AppMotion.Link.press(), label = "leave")
     val label = if (open) "Hide the controls" else "Show the controls"
     Box(
-        Modifier.pressable(label, onClick).size(PANEL_HANDLE).semantics { contentDescription = label },
+        Modifier.size(PANEL_HANDLE).semantics {
+            role = Role.Button
+            contentDescription = label
+            onClick(label = label) { onClick(); true }
+            customActions = listOf(CustomAccessibilityAction("Leave full screen") { onLeave(); true })
+        },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(20.dp)) {
+        Canvas(
+            Modifier.size(20.dp).graphicsLayer {
+                val k = 1f - 0.4f * leave.value.coerceIn(0f, 1f)
+                alpha = 1f - leave.value.coerceIn(0f, 1f)
+                scaleX = k
+                scaleY = k
+            },
+        ) {
             val k = turn.value                    // may run a little past 0 and 1: the spring's bounce shows in the turn
             val f = k.coerceIn(0f, 1f)            // sizes stay inside what they are meant to be
             val s = size.minDimension
@@ -285,10 +334,33 @@ internal fun PanelHandle(open: Boolean, onClick: () -> Unit) {
                 }
             }
         }
+        // the way out, grown from the middle as the tiles give way
+        Icon(
+            AppIcons.Minimize, null, tint = TextPrimary,
+            modifier = Modifier.size(22.dp).graphicsLayer {
+                val v = leave.value.coerceIn(0f, 1.2f)
+                alpha = v.coerceAtMost(1f)
+                scaleX = 0.6f + 0.4f * v
+                scaleY = 0.6f + 0.4f * v
+            },
+        )
     }
 }
 
 internal val PANEL_HANDLE = 46.dp
+
+/**
+ * The panel's measures. Folded it is a circle, a [PANEL_BUBBLE] across; unfolded it keeps that
+ * corner, and its controls are as tall as the handle, so a panel of controls alone is a pill.
+ * What sits in it, [PANEL_PAD] in from its edge, follows the same curve: the controls' and the
+ * shortcuts' corners are the panel's less that gap, so the two run side by side round a corner.
+ */
+internal val PANEL_PAD = 5.dp
+internal val PANEL_BUBBLE = PANEL_HANDLE + PANEL_PAD * 2
+internal val PANEL_RADIUS = PANEL_BUBBLE / 2
+internal val PanelShape = RoundedCornerShape(PANEL_RADIUS)
+internal val PanelInnerShape = RoundedCornerShape(PANEL_RADIUS - PANEL_PAD)
+
 private val CORNERS = listOf(-1 to -1, 1 to -1, 1 to 1, -1 to 1)
 private const val DIAGONAL = 0.70710677f
 
@@ -307,12 +379,18 @@ internal fun PanelShortcuts(
     LaunchedEffect(scroll.isScrollInProgress) { if (scroll.isScrollInProgress) onUsed() }
     // the line between the row and the controls, whichever side of it they are on
     val line = @Composable {
-        Box(Modifier.padding(horizontal = 10.dp, vertical = 5.dp).fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.1f)))
+        Box(Modifier.padding(horizontal = PANEL_RADIUS - PANEL_PAD, vertical = PANEL_PAD).fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.14f)))
     }
     Column(Modifier.fillMaxWidth()) {
         if (!above) line()
+        // a tile scrolled into the panel's corner is cut along its curve, not straight across
+        val inner = PANEL_RADIUS - PANEL_PAD
         Row(
-            Modifier.fillMaxWidth().fadeEnds(scroll).horizontalScroll(scroll),
+            Modifier
+                .fillMaxWidth()
+                .clip(if (above) RoundedCornerShape(topStart = inner, topEnd = inner) else RoundedCornerShape(bottomStart = inner, bottomEnd = inner))
+                .fadeEnds(scroll)
+                .horizontalScroll(scroll),
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             shortcuts.forEachIndexed { i, s ->
@@ -371,7 +449,7 @@ private fun PanelShortcut(index: Int, s: LinkShortcut, store: LinkShortcutStore,
                 )
             },
     ) {
-        ShortcutTile(s, store, icons, fx, glass = true, busy = busy)
+        ShortcutTile(s, store, icons, fx, glass = true, busy = busy, shape = PanelInnerShape)
     }
 }
 

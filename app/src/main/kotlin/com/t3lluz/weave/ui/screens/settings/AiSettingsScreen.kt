@@ -39,6 +39,7 @@ import com.t3lluz.weave.data.remote.AiAccess
 import com.t3lluz.weave.data.remote.AiApiClient
 import com.t3lluz.weave.data.remote.AiProvider
 import com.t3lluz.weave.data.remote.AnthropicModels
+import com.t3lluz.weave.ui.components.TileRow
 import com.t3lluz.weave.ui.components.AiAccessBadge
 import com.t3lluz.weave.ui.components.AiPickerSheet
 import com.t3lluz.weave.ui.components.AiProviderLogo
@@ -101,7 +102,7 @@ fun AiSettingsScreen(
             .background(Background)
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = TileRow.Side)
             .subScreenBottomPadding(),
     ) {
         SubScreenHeader(title = "AI", subtitle = "Claude makes shortcuts from a few words", onNavigateBack = onNavigateBack)
@@ -242,6 +243,7 @@ private fun AccountRoom(state: AiUiState, viewModel: AiSetupViewModel) {
 @Composable
 private fun KeyRoom(provider: AiProvider, saved: String, onSave: (String) -> Unit) {
     val context = LocalContext.current
+    val haptics = rememberHaptics()
     var draft by remember(provider, saved) { mutableStateOf(saved) }
     var visible by remember { mutableStateOf(false) }
     val dirty = draft.trim() != saved
@@ -264,7 +266,7 @@ private fun KeyRoom(provider: AiProvider, saved: String, onSave: (String) -> Uni
                     if (visible) AppIcons.EyeOff else AppIcons.Eye,
                     contentDescription = if (visible) "Hide key" else "Show key",
                     tint = TextTertiary,
-                    modifier = Modifier.size(22.dp).clip(CircleShape).clickable { visible = !visible },
+                    modifier = Modifier.size(22.dp).clip(CircleShape).clickable { haptics.tick(); visible = !visible },
                 )
             },
         )
@@ -286,7 +288,7 @@ private fun KeyRoom(provider: AiProvider, saved: String, onSave: (String) -> Uni
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     Text(
                         "Get a key", color = LinkScreenTone, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clip(CircleShape).clickable { context.openUrl(url) }.padding(horizontal = 8.dp, vertical = 8.dp),
+                        modifier = Modifier.clip(CircleShape).clickable { haptics.tick(); context.openUrl(url) }.padding(horizontal = 8.dp, vertical = 8.dp),
                     )
                 }
             }

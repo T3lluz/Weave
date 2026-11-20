@@ -1,5 +1,7 @@
 package com.t3lluz.weave.ui.screens.link
 
+import com.t3lluz.weave.ui.theme.AppMotion
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -228,15 +230,17 @@ internal fun LookRoom(
             Row(Modifier.fillMaxWidth().horizontalEdgeFade(colors).horizontalScroll(colors), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GLYPH_COLORS.forEach { c ->
                     val on = glyph.color == c
+                    // the ring moves to the picked one, and the pick is felt
+                    val ring by animateColorAsState(if (on) TextPrimary else Color.Transparent, AppMotion.colorTween(), label = "swatch")
                     Box(
                         Modifier
+                            .pressable("Colour", enabled = true) { setGlyph(glyph.copy(color = c)) }
                             .size(34.dp)
                             .clip(CircleShape)
-                            .border(2.dp, if (on) TextPrimary else Color.Transparent, CircleShape)
+                            .border(2.dp, ring, CircleShape)
                             .padding(4.dp)
                             .clip(CircleShape)
-                            .background(c?.let { Color(it.toInt()) } ?: tone)
-                            .clickable { setGlyph(glyph.copy(color = c)) },
+                            .background(c?.let { Color(it.toInt()) } ?: tone),
                     )
                 }
             }
