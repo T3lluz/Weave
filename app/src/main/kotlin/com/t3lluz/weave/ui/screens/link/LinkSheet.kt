@@ -123,6 +123,11 @@ internal fun LinkSheet(
                     ToggleRow("Follow the pointer", "Show whichever screen the pointer is on", state.followPointer, LinkScreenTone) {
                         session.showMonitor(if (state.followPointer) state.monitor else null)
                     }
+                    if (LinkSession.POINTER in state.caps) {
+                        ToggleRow("Hold at the edge", "Push a little further to cross to the next screen, with a peek of it first", config.edgeHold, LinkScreenTone) {
+                            session.setEdgeHold(!config.edgeHold)
+                        }
+                    }
                 }
                 if (picture) {
                     Spacer(Modifier.height(10.dp))
@@ -211,6 +216,16 @@ internal fun LinkSheet(
                 }
                 ToggleRow("Scroll like a phone", "The page moves with your fingers", config.naturalScroll, LinkHandsTone) {
                     viewModel.change { it.copy(naturalScroll = !it.naturalScroll) }
+                }
+                ToggleRow("Scroll strip", "Slide one finger along the pad's edge to scroll", config.scrollStrip, LinkHandsTone) {
+                    viewModel.change { it.copy(scrollStrip = !it.scrollStrip) }
+                }
+                AnimatedVisibility(
+                    visible = config.scrollStrip,
+                    enter = expandVertically(AppMotion.slideTween()) + fadeIn(AppMotion.fadeTween()),
+                    exit = shrinkVertically(AppMotion.slideTween()) + fadeOut(AppMotion.fadeTween()),
+                ) {
+                    ScrollStripRows(config, onNotch = sheetHaptics::notch) { change -> viewModel.change(change) }
                 }
                 ToggleRow("Phone keyboard as usual", "Suggestions, autocorrect and swiping; plain keys in a terminal", config.nativeKeyboard, LinkHandsTone) {
                     viewModel.change { it.copy(nativeKeyboard = !it.nativeKeyboard) }
@@ -308,6 +323,41 @@ private fun MonitorTile(m: LinkMonitor, picked: Boolean, shown: Boolean, modifie
         )
         if (picked) {
             Icon(AppIcons.Lock, null, tint = TextPrimary, modifier = Modifier.align(Alignment.TopEnd).size(10.dp))
+        }
+    }
+}
+
+/**
+ * The scroll strip's settings, under its switch: which edge, how fast, and how it feels. The
+ * strip on the pad turns into its new place as they change, so the room needs no picture of it.
+ */
+@Composable
+private fun ScrollStripRows(config: LinkConfig, onNotch: () -> Unit, change: ((LinkConfig) -> LinkConfig) -> Unit) {
+    Column {
+        Text("Which edge", color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+        Segmented(
+            listOf(true to "Left edge", false to "Right edge"),
+            picked = config.scrollStripLeft, tone = LinkHandsTone,
+        ) { left -> change { it.copy(scrollStripLeft = left) } }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)) {
+            Text("Strip speed", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(14.dp))
+            Slider(
+                value = config.scrollStripSpeed,
+                onValueChange = { v ->
+                    if ((v * 4f).toInt() != (config.scrollStripSpeed * 4f).toInt()) onNotch()
+                    change { it.copy(scrollStripSpeed = v) }
+                },
+                valueRange = 0.5f..2.5f,
+                colors = SliderDefaults.colors(thumbColor = LinkHandsTone, activeTrackColor = LinkHandsTone, inactiveTrackColor = Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        ToggleRow("Roll on after a flick", "Off: the page stops when your finger lifts", config.scrollStripRoll, LinkHandsTone) {
+            change { it.copy(scrollStripRoll = !it.scrollStripRoll) }
+        }
+        ToggleRow("Feel it under your finger", "A snap as it comes free of the cloth, then a tick at every notch", config.scrollStripTicks, LinkHandsTone) {
+            change { it.copy(scrollStripTicks = !it.scrollStripTicks) }
         }
     }
 }

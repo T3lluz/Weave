@@ -29,6 +29,12 @@ import java.util.concurrent.TimeUnit
  */
 class LinkVideo {
     val texture = SurfaceTexture(false)
+
+    /**
+     * The last picture of each monitor, by name, grabbed as the stream left it: what the screen
+     * shows of a monitor the pointer is pushed toward before its stream comes ([MonitorEdge]).
+     */
+    val stills = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
     private val surface = Surface(texture)
 
     /** The picture's size in pixels once the decoder knows it; 0×0 before the first frame. */

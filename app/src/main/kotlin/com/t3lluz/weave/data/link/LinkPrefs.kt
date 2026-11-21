@@ -26,6 +26,16 @@ data class LinkConfig(
     val speed: Float = 1.6f,
     /** Two fingers move the page with them, as a phone scrolls. */
     val naturalScroll: Boolean = true,
+    /** A strip along one edge of the trackpad that scrolls under one finger, as a mouse's wheel. */
+    val scrollStrip: Boolean = true,
+    /** The strip is on the pad's left edge; otherwise its right. */
+    val scrollStripLeft: Boolean = false,
+    /** Notches of the wheel per finger travel on the strip, 1 being two fingers' rate. */
+    val scrollStripSpeed: Float = 1f,
+    /** A flick along the strip keeps the page rolling after the finger lifts. */
+    val scrollStripRoll: Boolean = true,
+    /** The strip ticks under the finger at each notch, as a wheel with detents. */
+    val scrollStripTicks: Boolean = true,
     /** Raise the keyboard when a click on the laptop lands in a text field. */
     val autoKeyboard: Boolean = true,
     /** Bring the laptop's sound up to a phone's level: a mix set low for headphones is a whisper from a speaker. */
@@ -36,6 +46,8 @@ data class LinkConfig(
     val showPicture: Boolean = true,
     /** The shortcuts over the trackpad are shown. Off, the trackpad has their room. */
     val showShortcuts: Boolean = true,
+    /** The pointer stops at the edge between two monitors, and a little more push takes it across, with a peek of the next ([MonitorEdge]). */
+    val edgeHold: Boolean = true,
     /** The phone draws the pointer itself, where the finger puts it, and the laptop's is left out of the picture. */
     val localPointer: Boolean = true,
     /** The phone's keyboard works as in any app: suggestions, autocorrect, swiping. Plain keys in a terminal. */
@@ -175,12 +187,18 @@ class LinkPrefs @Inject constructor(
             putString("quality", next.quality)
             putFloat("speed", next.speed)
             putBoolean("naturalScroll", next.naturalScroll)
+            putBoolean("scrollStrip", next.scrollStrip)
+            putBoolean("scrollStripLeft", next.scrollStripLeft)
+            putFloat("scrollStripSpeed", next.scrollStripSpeed)
+            putBoolean("scrollStripRoll", next.scrollStripRoll)
+            putBoolean("scrollStripTicks", next.scrollStripTicks)
             putBoolean("autoKeyboard", next.autoKeyboard)
             putBoolean("fillPreview", next.fillPreview)
             putBoolean("levelSound", next.levelSound)
             putBoolean("showPicture", next.showPicture)
             putBoolean("showShortcuts", next.showShortcuts)
             putBoolean("localPointer", next.localPointer)
+            putBoolean("edgeHold", next.edgeHold)
             putBoolean("nativeKeyboard", next.nativeKeyboard)
             putFloat("pointerSize", next.pointerSize)
             putString("wakeMac", next.wakeMac)
@@ -201,12 +219,18 @@ class LinkPrefs @Inject constructor(
             quality = prefs.getString("quality", d.quality) ?: d.quality,
             speed = prefs.getFloat("speed", d.speed),
             naturalScroll = prefs.getBoolean("naturalScroll", d.naturalScroll),
+            scrollStrip = prefs.getBoolean("scrollStrip", d.scrollStrip),
+            scrollStripLeft = prefs.getBoolean("scrollStripLeft", d.scrollStripLeft),
+            scrollStripSpeed = prefs.getFloat("scrollStripSpeed", d.scrollStripSpeed),
+            scrollStripRoll = prefs.getBoolean("scrollStripRoll", d.scrollStripRoll),
+            scrollStripTicks = prefs.getBoolean("scrollStripTicks", d.scrollStripTicks),
             autoKeyboard = prefs.getBoolean("autoKeyboard", d.autoKeyboard),
             fillPreview = prefs.getBoolean("fillPreview", d.fillPreview),
             levelSound = prefs.getBoolean("levelSound", d.levelSound),
             showPicture = prefs.getBoolean("showPicture", d.showPicture),
             showShortcuts = prefs.getBoolean("showShortcuts", d.showShortcuts),
             localPointer = prefs.getBoolean("localPointer", d.localPointer),
+            edgeHold = prefs.getBoolean("edgeHold", d.edgeHold),
             nativeKeyboard = prefs.getBoolean("nativeKeyboard", d.nativeKeyboard),
             pointerSize = prefs.getFloat("pointerSize", d.pointerSize),
             wakeMac = prefs.getString("wakeMac", d.wakeMac).orEmpty(),

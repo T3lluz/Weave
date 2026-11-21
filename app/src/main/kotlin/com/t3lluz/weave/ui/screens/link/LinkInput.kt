@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import com.t3lluz.weave.data.link.LinkSession
@@ -90,6 +91,13 @@ fun Modifier.trackpad(
     onTap: (fingers: Int, at: Offset) -> Unit = { _, _ -> onTick() },
     /** A drag that was held is let go. */
     onDrop: () -> Unit = {},
+    /**
+     * Where the pad is on the screen, px. It can move under a finger (the picture over it changes
+     * shape the moment the stream goes to another monitor). A finger's travel already leaves that
+     * out (Compose gives the previous place in the pad's present place), but where the fingers are,
+     * for the computer's own touchpad, is taken over the glass: a still finger stays put.
+     */
+    origin: () -> Offset = { Offset.Zero },
 ): Modifier = pointerInput(session, speed, naturalScroll, nativePad) {
     val slop = viewConfiguration.touchSlop
     val notch = DP_PER_NOTCH * density
@@ -125,6 +133,9 @@ fun Modifier.trackpad(
             var speedY = 0f
             var scrolledAt = 0L
             down.consume()
+            // where the pad is, and a finger's place over the glass and not over the pad
+            var padAt = origin()
+            fun PointerInputChange.spot() = position + padAt
             // a gesture cut short (the pad leaves the screen, its settings change) still lets the cloth go
             try {
                 while (true) {
@@ -143,6 +154,7 @@ fun Modifier.trackpad(
                     }
                     val pressed = event.changes.filter { it.pressed }
                     if (pressed.isEmpty()) break
+                    padAt = origin()
                     // the cloth dents under each finger
                     onFingers(pressed.map { it.id.value to it.position })
                     lastAt = pressed.fold(Offset.Zero) { sum, it -> sum + it.position } / pressed.size.toFloat()
@@ -157,7 +169,7 @@ fun Modifier.trackpad(
                         }
                     } else {
                         if (landed.isEmpty()) landedAt = pressed[0].uptimeMillis
-                        pressed.forEach { if (it.id.value !in landed) landed[it.id.value] = it.position }
+                        pressed.forEach { if (it.id.value !in landed) landed[it.id.value] = it.spot() }
                     }
                     if (dragging || (pressed.size == 1 && fingers == 1)) {
                         // One finger moves the pointer. In a drag any finger does: the one that
@@ -185,7 +197,7 @@ fun Modifier.trackpad(
                         // Any one finger leaving its place counts, not only all of them going the
                         // same way: in a pinch the fingers part and their middle stays put.
                         if (scrolled) onGlide(hypot(delta.x, delta.y) / density)
-                        if (!strayed && pressed.any { (it.position - landed.getValue(it.id.value)).getDistance() > slop }) {
+                        if (!strayed && pressed.any { (it.spot() - landed.getValue(it.id.value)).getDistance() > slop }) {
                             strayed = true
                             scrolled = true
                         }
@@ -196,7 +208,7 @@ fun Modifier.trackpad(
                                 usedPad = true
                                 session.touch(pressed.map { Triple(it.id.value, landed.getValue(it.id.value).x * mm, landed.getValue(it.id.value).y * mm) }, naturalScroll)
                             }
-                            session.touch(pressed.map { Triple(it.id.value, it.position.x * mm, it.position.y * mm) }, naturalScroll)
+                            session.touch(pressed.map { Triple(it.id.value, it.spot().x * mm, it.spot().y * mm) }, naturalScroll)
                         } else if (scrolled && pressed.size == 2 && fingers == 2 && !swept) {
                             // (a third finger ends the scroll: lifting back to two must not jolt the page)
                             // A quick sweep plainly sideways is back or forward, as on a laptop's pad:

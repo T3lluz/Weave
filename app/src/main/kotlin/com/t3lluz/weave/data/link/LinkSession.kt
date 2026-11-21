@@ -152,8 +152,23 @@ class LinkSession @Inject constructor(
     private fun shownChanged() {
         val st = _state.value
         val m = st.monitors.firstOrNull { it.name == st.monitor } ?: st.shownMonitor
-        localPointer.onMonitor(m?.name, (m?.layoutWidth?.takeIf { it > 0 } ?: m?.width ?: 1).toFloat(), (m?.layoutHeight?.takeIf { it > 0 } ?: m?.height ?: 1).toFloat())
+        // Where the pointer went over to it, by the moves sent, while the laptop has yet to say:
+        // it is drawn there at once, and the next edge holds it from the first move. Only when the
+        // phone's own moves took it off the last monitor: one the laptop's mouse moved is not known.
+        val movedOff = localPointer.rawX !in 0f..1f || localPointer.rawY !in 0f..1f
+        val seed = if (m == null || m.layoutWidth <= 0 || m.layoutHeight <= 0 || !movedOff) null else {
+            pointerMonitor?.let { was -> st.monitors.firstOrNull { it.name == was } }
+                ?.takeIf { it.name != m.name && it.layoutWidth > 0 }
+                ?.let { was -> localPointer.onDesk(was.x to was.y) }
+                ?.let { (dx, dy) -> (dx - m.x) / m.layoutWidth to (dy - m.y) / m.layoutHeight }
+                ?.takeIf { (x, y) -> x in -SEED_SLACK..1f + SEED_SLACK && y in -SEED_SLACK..1f + SEED_SLACK }
+        }
+        localPointer.onMonitor(m?.name, (m?.layoutWidth?.takeIf { it > 0 } ?: m?.width ?: 1).toFloat(), (m?.layoutHeight?.takeIf { it > 0 } ?: m?.height ?: 1).toFloat(), seed)
+        if (m != null) pointerMonitor = m.name
     }
+
+    /** The monitor [localPointer] was last told about, to seed the next from. */
+    private var pointerMonitor: String? = null
 
     private val _pointer = MutableStateFlow<LinkPointer?>(null)
     val pointer: StateFlow<LinkPointer?> = _pointer
@@ -216,6 +231,9 @@ class LinkSession @Inject constructor(
         _catalog.value = null
         catalogAsked = 0L
         _pointer.value = null
+        desk.forget()
+        edge.reset()
+        reportedOn = null
     }
 
     /** After the host changed, or to try again by hand. */
@@ -461,6 +479,8 @@ class LinkSession @Inject constructor(
                 }
                 // the picture, or with it off, where the pointer is (a tandem that can't say shows the picture)
                 if (prefs.config.value.showPicture || !_state.value.canHidePicture) askForPicture() else send("""{"t":"pointer","on":true}""")
+                // the edges between monitors hold the pointer wherever it is, so the laptop says where on the whole desk
+                if (prefs.config.value.edgeHold && prefs.config.value.showPicture && POINTER in _state.value.caps) send("""{"t":"pointer","on":true}""")
                 catalogAsked = 0L
                 // the laptop's setting "start with sound" turns it on from the first frame
                 if (m.optBoolean("laptopSound") && !_state.value.laptopSound) _state.update { it.copy(laptopSound = true) }
@@ -536,8 +556,15 @@ class LinkSession @Inject constructor(
                 cursorX = m.optDouble("x", 0.5).toFloat()
                 cursorY = m.optDouble("y", 0.5).toFloat()
                 localPointer.report(cursorX, cursorY, android.os.SystemClock.uptimeMillis(), if (m.has("seq")) m.optLong("seq") else null)
+                // (the laptop only says this while the pointer is on the monitor it sends)
+                _state.value.monitor?.let { reportedOn = it }
             }
-            "ptr" -> _pointer.value = LinkPointer(m.optDouble("x").toFloat(), m.optDouble("y").toFloat())
+            "ptr" -> {
+                val p = LinkPointer(m.optDouble("x").toFloat(), m.optDouble("y").toFloat())
+                _pointer.value = p
+                desk.report(p.x, p.y, android.os.SystemClock.uptimeMillis())
+                monitorUnder(_state.value.monitors, p)?.let { reportedOn = it.name }
+            }
             "monitors" -> m.optJSONArray("monitors")?.let { a ->
                 _state.update { it.copy(monitors = monitors(a)) }
                 shownChanged()
@@ -574,6 +601,7 @@ class LinkSession @Inject constructor(
                 val ms = (System.nanoTime() - pingSentAt) / 1_000_000
                 _state.update { it.copy(pingMs = ms.toInt()) }
                 localPointer.rttMs = ms.toInt()
+                desk.rttMs = ms.toInt()
             }
         }
     }
@@ -686,10 +714,77 @@ class LinkSession @Inject constructor(
     /** Numbers the moves, so the laptop's pointer reports can say which they already show. */
     private val moveSeq = java.util.concurrent.atomic.AtomicLong(0)
 
+    /** The edge between monitors, held until the pointer is pushed through it ([MonitorEdge]); the screen reads it each frame. */
+    val edge = MonitorEdge()
+
+    /** Where the pointer is on the whole desk, whichever monitor the picture shows ([DeskPointer]). */
+    private val desk = DeskPointer()
+
+    /**
+     * Where the pointer is on the desk now: by [localPointer] on the monitor shown, which knows to
+     * the move, else by [desk].
+     */
+    private fun pointerOnDesk(st: LinkState): LinkPointer? {
+        val p = localPointer
+        // the monitor its position is about: in a switch the state names the new one a moment before the pointer is told
+        val shown = st.monitors.firstOrNull { it.name == p.monitorName }
+        // Only while the laptop's last word puts the pointer on that monitor too: one moved off it by
+        // the laptop's own mouse leaves the phone's pointer where it last was, reports and all.
+        val agreed = reportedOn == null || reportedOn == p.monitorName
+        if (drawsPointer && agreed && p.shown && shown != null && shown.layoutWidth > 0 && p.rawX in 0f..1f && p.rawY in 0f..1f) {
+            return LinkPointer(shown.x + p.rawX * shown.layoutWidth, shown.y + p.rawY * shown.layoutHeight)
+        }
+        return desk.at(p.gain, st.monitors)
+    }
+
+    /**
+     * The monitor the laptop last said the pointer is on. The pointer leaves it only by being let
+     * through an edge, or by the laptop's own mouse, which the next report tells: a guess by the
+     * moves that runs past an edge (it does in a quick stroke, by a move or so) is held to it.
+     */
+    @Volatile private var reportedOn: String? = null
+
     fun move(dx: Float, dy: Float) {
+        val now = android.os.SystemClock.uptimeMillis()
+        var sx = dx
+        var sy = dy
+        // the edges hold wherever the pointer is, on the monitor shown or another
+        val st = _state.value
+        // Only with the picture showing (Fredde, 2026-11-21): folded away, the pointer crosses as it
+        // always did, and nothing on the pad or in the hands says otherwise.
+        val pictureShown = prefs.config.value.showPicture || !st.canHidePicture
+        val hold = prefs.config.value.edgeHold && pictureShown && st.monitors.size > 1
+        // just let through: nothing holds it until the laptop says it is on the other side
+        val crossing = now - edge.freedAt < CROSSING_MS && reportedOn != edge.beyond
+        val guess = if (hold && !crossing) pointerOnDesk(st) else null
+        val on = st.monitors.firstOrNull { it.name == reportedOn && it.layoutWidth > 0 } ?: guess?.let { monitorUnder(st.monitors, it) }
+        val at = if (guess != null && on != null) {
+            LinkPointer(guess.x.coerceIn(on.x.toFloat(), on.x + on.layoutWidth - 1f), guess.y.coerceIn(on.y.toFloat(), on.y + on.layoutHeight - 1f))
+        } else {
+            null
+        }
+        if (at != null && on != null) {
+            val (fx, fy) = edge.filter(
+                dx, dy, (at.x - on.x) / on.layoutWidth, (at.y - on.y) / on.layoutHeight,
+                localPointer.gain, on, st.monitors, now,
+            )
+            sx = fx
+            sy = fy
+        } else if (!crossing) {
+            edge.reset()
+        }
+        if (sx == 0f && sy == 0f) return
         val seq = moveSeq.incrementAndGet()
-        send("""{"t":"m","dx":${round2(dx)},"dy":${round2(dy)},"s":$seq}""")
-        if (drawsPointer) localPointer.sent(dx, dy, android.os.SystemClock.uptimeMillis(), seq)
+        send("""{"t":"m","dx":${round2(sx)},"dy":${round2(sy)},"s":$seq}""")
+        if (drawsPointer) localPointer.sent(sx, sy, now, seq)
+        desk.sent(sx, sy, now)
+    }
+
+    /** The edges between monitors hold the pointer, or not: they need the pointer's place on the whole desk, picture or none. */
+    fun setEdgeHold(on: Boolean) {
+        prefs.update { it.copy(edgeHold = on) }
+        if (_state.value.status == LinkStatus.Online && prefs.config.value.showPicture) send("""{"t":"pointer","on":$on}""")
+        if (!on) edge.reset()
     }
     fun scroll(dx: Float, dy: Float) = send("""{"t":"scroll","dx":${round2(dx)},"dy":${round2(dy)}}""")
     /**
@@ -824,7 +919,8 @@ class LinkSession @Inject constructor(
     fun setPicture(on: Boolean) {
         prefs.update { it.copy(showPicture = on) }
         if (on) {
-            send("""{"t":"pointer","on":false}""")
+            // still wanted while the edges hold: they need the pointer wherever it is
+            if (!prefs.config.value.edgeHold) send("""{"t":"pointer","on":false}""")
             _state.update { it.copy(videoError = null) }
             askForPicture()
         } else {
@@ -880,6 +976,12 @@ class LinkSession @Inject constructor(
         const val POINTER = "pointer"
         /** This tandem can leave the pointer out of the picture, for the phone to draw its own. */
         const val LOCAL_CURSOR = "localcursor"
+
+        /** How far outside a monitor (as a share of it) the pointer can be by the moves and still seed it: the moves run a little ahead of the laptop. */
+        const val SEED_SLACK = 0.05f
+
+        /** After the edge lets the pointer through, how long it waits at most for the laptop to say it is across. */
+        const val CROSSING_MS = 700L
         /** This tandem sends its clipboard as it changes, for the phone to keep the two in step. */
         const val CLIP_SYNC = "clipsync"
         /** A copy from the laptop this soon after the phone sent its own was sent before that one landed. */

@@ -19,6 +19,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
@@ -56,6 +58,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
@@ -67,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.t3lluz.weave.data.link.LinkConfig
 import com.t3lluz.weave.data.link.LinkSession
+import com.t3lluz.weave.data.link.pushing
 import com.t3lluz.weave.ui.screens.health.HealthDisplay
 import com.t3lluz.weave.ui.screens.health.roomColor
 import com.t3lluz.weave.ui.theme.AppIcons
@@ -179,6 +184,9 @@ private class Dent {
 
 private const val NO_FINGER = -1L
 
+/** The scroll strip's finger, among the pad's own for the cloth's dents: a number no pointer has. */
+private const val STRIP_FINGER = Long.MIN_VALUE + 1
+
 /**
  * Gives each finger on the pad its own dent and keeps it under that finger, so a dent never
  * jumps from one finger to another when one of two lifts. A new finger takes a dent that is
@@ -199,10 +207,16 @@ private fun follow(dents: List<Dent>, fingers: List<Pair<Long, Offset>>) {
 }
 
 /** The weave: one faint dot every this many dp, offset every other row. */
-private const val WEAVE_DP = 13f
+internal const val WEAVE_STEP_DP = 13f
 
 /** A dot's radius. */
 private const val WEAVE_DOT_DP = 1.5f
+
+/** How far in from either side of a pad [width] wide the weave's outer dots sit, all px: the same both sides. */
+internal fun weaveMargin(width: Float, step: Float): Float {
+    val spans = kotlin.math.floor(width / step - 1f).coerceAtLeast(0f)
+    return (width - spans * step) / 2f
+}
 
 /**
  * The trackpad, as a room in the hands' green with cloth on it. Until a finger has been on
@@ -238,6 +252,17 @@ internal fun LinkTrackpad(
     // a dent per finger: where each is and how far the cloth is pressed there, read only while drawing
     val dents = remember { List(DENTS) { Dent() } }
     var anyFinger by remember { mutableStateOf(false) }
+    // the scroll strip, drawn in the cloth: how awake it is and where the finger is, and where it ends above the pad's foot
+    val strip = remember { StripLook() }
+    // where the pad is on the screen: the picture over it can change shape under a finger
+    var padPlaced by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    // the fingers on the pad, and a finger holding the scroll strip's cloth: each dents it
+    val padFingers = remember { arrayOf<List<Pair<Long, Offset>>>(emptyList()) }
+    var stripHold by remember { mutableStateOf<Offset?>(null) }
+    fun dent() = follow(dents, padFingers[0] + listOfNotNull(stripHold?.let { STRIP_FINGER to it }))
+    val stripFoot by androidx.compose.animation.core.animateDpAsState(
+        if (buttons) STRIP_FOOT_OVER_BUTTONS_DP.dp else STRIP_FOOT_DP.dp, AppMotion.Link.panel(), label = "stripFoot",
+    )
     // A tap sends a ring out through the weave from where it landed: the dots light up as it
     // passes and settle again. One runs from the middle when the pad first appears.
     val ripples = remember { mutableStateListOf<Ripple>() }
@@ -270,27 +295,82 @@ internal fun LinkTrackpad(
         }
     }
 
+    // The edge between two monitors, pushed from this pad (MonitorEdge): the cloth is drawn taut
+    // toward that side, a few dp, and its dots light green at that side round the finger's height,
+    // more and wider the harder it is pushed. When the pointer goes through, a ring goes out from
+    // the finger, that light flashes and fades, and the cloth springs back with a wobble; given up
+    // short of that, it eases back quietly.
+    val edge = session.edge
+    val taut = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val tautSpeed = remember { floatArrayOf(0f) }
+    var tautDir by remember { mutableStateOf(0 to 0) }
+    val tautFlash = remember { Animatable(0f) }
+    LaunchedEffect(edge, reduced) {
+        if (reduced) return@LaunchedEffect
+        var last = 0L
+        var freed = edge.freedAt
+        while (true) androidx.compose.runtime.withFrameNanos { t ->
+            val dt = if (last == 0L) 0.016f else ((t - last) / 1e9f).coerceIn(0.001f, 0.05f)
+            last = t
+            val now = android.os.SystemClock.uptimeMillis()
+            var q = taut.floatValue
+            var v = tautSpeed[0]
+            if (edge.freedAt != freed) {
+                freed = edge.freedAt
+                val at = dents.firstOrNull { it.touching && it.at != Offset.Unspecified }?.at
+                    ?: Offset(padSize.width / 2f, padSize.height / 2f)
+                ripple(at, far = 1.6f)
+                scope.launch {
+                    tautFlash.snapTo(1f)
+                    tautFlash.animateTo(0f, tween(560, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+                }
+            }
+            val pushing = edge.pushing(now)
+            if (pushing) tautDir = edge.dirX to edge.dirY
+            val target = if (pushing) edge.push else 0f
+            // drawn taut on a firm spring; let go, it springs back past rest and settles
+            val stiff = if (target > q) TAUT_STIFF_IN else TAUT_STIFF_OUT
+            val damp = 2f * (if (target > q) 0.85f else 0.36f) * kotlin.math.sqrt(stiff)
+            var left = dt
+            while (left > 0f) {
+                val h = minOf(left, 0.004f)
+                v += (stiff * (target - q) - damp * v) * h
+                q += v * h
+                left -= h
+            }
+            q = q.coerceIn(-0.6f, 1.2f)
+            if (target == 0f && kotlin.math.abs(q) < 0.002f && kotlin.math.abs(v) < 0.01f) {
+                q = 0f
+                v = 0f
+            }
+            taut.floatValue = q
+            tautSpeed[0] = v
+        }
+    }
+
     Box(modifier) {
         Box(
             Modifier
                 .matchParentSize()
-                // A swipe that starts at the pad's edge is the pad's, not Android's "back". (The
-                // system honours this for the lower 200 dp of each side of the screen.)
+                // A swipe that starts at the pad's edge is the pad's, not Android's "back" (the remote
+                // hides the navigation bar the sticky way, so the system honours this all the way up).
                 .systemGestureExclusion()
                 .clip(shape)
                 .then(if (reduced) Modifier else Modifier.clothDent(dents))
                 .background(room)
                 .drawWithCache {
-                    // the weave: one path of dots, made once for the pad's size
-                    val step = WEAVE_DP * density
+                    // The weave: one path of dots, made once for the pad's size. It sits evenly
+                    // between the pad's sides, so the scroll strip's seam is the same on either.
+                    val step = WEAVE_STEP_DP * density
                     val r = WEAVE_DOT_DP * density
+                    val margin = weaveMargin(size.width, step)
                     val weave = Path()
                     val ring = Path()
                     var row = 0
                     var y = step / 2
                     while (y < size.height) {
-                        var x = if (row % 2 == 0) step / 2 else step
-                        while (x < size.width) {
+                        var x = if (row % 2 == 0) margin else margin + step / 2
+                        while (x < size.width - margin + 1f) {
                             weave.addOval(androidx.compose.ui.geometry.Rect(x - r, y - r, x + r, y + r))
                             x += step
                         }
@@ -298,48 +378,86 @@ internal fun LinkTrackpad(
                         row++
                     }
                     onDrawBehind {
-                        drawPath(weave, Color.White.copy(alpha = 0.07f))
-                        // held: the dots round each finger on the pad are lit in the hands' green, brightest
-                        // close in and dying away to nothing at the rim, so the light has no edge to see
-                        val g = grip.value.coerceIn(0f, 1.2f)
-                        if (g > 0.01f) {
-                            for (dent in dents) {
-                                val at = dent.at
-                                if (!dent.touching || at == Offset.Unspecified) continue
-                                val r = GRIP_DP * density * (0.55f + 0.45f * g)
-                                val light = Brush.radialGradient(
-                                    colorStops = Array(GRIP_FALL.size) { i -> GRIP_FALL[i].first to LinkHandsTone.copy(alpha = (GRIP_FALL[i].second * g).coerceIn(0f, 1f)) },
-                                    center = at, radius = r,
-                                )
-                                ring.rewind()
-                                ring.fillType = PathFillType.NonZero
-                                ring.addOval(androidx.compose.ui.geometry.Rect(at.x - r, at.y - r, at.x + r, at.y + r))
-                                clipPath(ring) { drawPath(weave, light) }
+                        // the cloth, drawn taut toward an edge the pointer is pushed against
+                        val tq = taut.floatValue
+                        val drag = TAUT_DRAG_DP * density * tq
+                        translate(tautDir.first * drag, tautDir.second * drag) {
+                            if (config.scrollStrip) {
+                                // the scroll strip's side of the weave is the strip's to draw: at rest the same dots, a seam of them lit
+                                val band = stripBand(margin, step)
+                                val bottom = stripBottom(size.height, stripFoot.toPx(), step)
+                                val x = if (config.scrollStripLeft) 0f else size.width - band
+                                clipRect(x, 0f, x + band, bottom, androidx.compose.ui.graphics.ClipOp.Difference) {
+                                    drawPath(weave, Color.White.copy(alpha = 0.07f))
+                                }
+                                drawStrip(strip, config.scrollStripLeft, margin, step, r, bottom)
+                            } else {
+                                drawPath(weave, Color.White.copy(alpha = 0.07f))
                             }
-                        }
-                        // The rings: the same dots again, lit only where each ring is right now. Three
-                        // bands, the middle one brightest, each a plain colour through a ring-shaped
-                        // cut-out (no gradient: the dots are small enough that bands read as a soft edge).
-                        for (one in ripples) {
-                            val t = one.out.value
-                            val band = RIPPLE_BAND_DP * density / 3f
-                            // it runs out fast and slows, and has lost most of its light by halfway: quick, then gone
-                            val reach = RIPPLE_REACH_DP * density * one.far * (1f - (1f - t) * (1f - t))
-                            val fade = (1f - t) * (1f - t)
-                            for ((i, share) in RIPPLE_BANDS.withIndex()) {
-                                val inner = (reach - band * 1.5f + band * i).coerceAtLeast(0f)
-                                val outer = reach - band * 1.5f + band * (i + 1)
-                                if (outer <= 0f) continue
-                                ring.rewind()
-                                ring.fillType = PathFillType.EvenOdd
-                                ring.addOval(androidx.compose.ui.geometry.Rect(one.at.x - outer, one.at.y - outer, one.at.x + outer, one.at.y + outer))
-                                if (inner > 0f) ring.addOval(androidx.compose.ui.geometry.Rect(one.at.x - inner, one.at.y - inner, one.at.x + inner, one.at.y + inner))
-                                clipPath(ring) { drawPath(weave, Color.White.copy(alpha = RIPPLE_LIGHT * share * fade)) }
+                            // the edge's pull: the dots at that side lit round the finger's height, wider the harder it is
+                            // pushed, and a flash of it as the pointer goes through
+                            val pull = tq.coerceAtLeast(0f) + tautFlash.value * 0.9f
+                            if (pull > 0.01f && tautDir != (0 to 0)) {
+                                val finger = dents.firstOrNull { it.touching && it.at != Offset.Unspecified }?.at ?: Offset(size.width / 2, size.height / 2)
+                                val (ex, ey) = tautDir
+                                val center = Offset(
+                                    if (ex > 0) size.width else if (ex < 0) 0f else finger.x,
+                                    if (ey > 0) size.height else if (ey < 0) 0f else finger.y,
+                                )
+                                val reachOut = (TAUT_GLOW_DP + TAUT_GLOW_MORE_DP * tq.coerceIn(0f, 1f)) * density
+                                drawPath(
+                                    weave,
+                                    Brush.radialGradient(
+                                        0f to LinkHandsTone.copy(alpha = (0.7f * pull).coerceAtMost(0.9f)),
+                                        0.45f to LinkHandsTone.copy(alpha = (0.28f * pull).coerceAtMost(0.4f)),
+                                        1f to Color.Transparent,
+                                        center = center, radius = reachOut,
+                                    ),
+                                )
+                            }
+                            // held: the dots round each finger on the pad are lit in the hands' green, brightest
+                            // close in and dying away to nothing at the rim, so the light has no edge to see
+                            val g = grip.value.coerceIn(0f, 1.2f)
+                            if (g > 0.01f) {
+                                for (dent in dents) {
+                                    val at = dent.at
+                                    if (!dent.touching || at == Offset.Unspecified) continue
+                                    val r = GRIP_DP * density * (0.55f + 0.45f * g)
+                                    val light = Brush.radialGradient(
+                                        colorStops = Array(GRIP_FALL.size) { i -> GRIP_FALL[i].first to LinkHandsTone.copy(alpha = (GRIP_FALL[i].second * g).coerceIn(0f, 1f)) },
+                                        center = at, radius = r,
+                                    )
+                                    ring.rewind()
+                                    ring.fillType = PathFillType.NonZero
+                                    ring.addOval(androidx.compose.ui.geometry.Rect(at.x - r, at.y - r, at.x + r, at.y + r))
+                                    clipPath(ring) { drawPath(weave, light) }
+                                }
+                            }
+                            // The rings: the same dots again, lit only where each ring is right now. Three
+                            // bands, the middle one brightest, each a plain colour through a ring-shaped
+                            // cut-out (no gradient: the dots are small enough that bands read as a soft edge).
+                            for (one in ripples) {
+                                val t = one.out.value
+                                val band = RIPPLE_BAND_DP * density / 3f
+                                // it runs out fast and slows, and has lost most of its light by halfway: quick, then gone
+                                val reach = RIPPLE_REACH_DP * density * one.far * (1f - (1f - t) * (1f - t))
+                                val fade = (1f - t) * (1f - t)
+                                for ((i, share) in RIPPLE_BANDS.withIndex()) {
+                                    val inner = (reach - band * 1.5f + band * i).coerceAtLeast(0f)
+                                    val outer = reach - band * 1.5f + band * (i + 1)
+                                    if (outer <= 0f) continue
+                                    ring.rewind()
+                                    ring.fillType = PathFillType.EvenOdd
+                                    ring.addOval(androidx.compose.ui.geometry.Rect(one.at.x - outer, one.at.y - outer, one.at.x + outer, one.at.y + outer))
+                                    if (inner > 0f) ring.addOval(androidx.compose.ui.geometry.Rect(one.at.x - inner, one.at.y - inner, one.at.x + inner, one.at.y + inner))
+                                    clipPath(ring) { drawPath(weave, Color.White.copy(alpha = RIPPLE_LIGHT * share * fade)) }
+                                }
                             }
                         }
                     }
                 }
                 .onSizeChanged { padSize = it }
+                .onPlaced { padPlaced = it }
                 .drawBehind {
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                         val r = 70.dp.toPx()
@@ -354,6 +472,7 @@ internal fun LinkTrackpad(
                 }
                 .trackpad(
                     session, config.speed, config.naturalScroll,
+                    origin = { padPlaced?.takeIf { it.isAttached }?.positionInRoot() ?: Offset.Zero },
                     onTick = haptics::tick, onTouched = { viewModel.touched = true },
                     onHold = {
                         haptics.grab()
@@ -371,7 +490,8 @@ internal fun LinkTrackpad(
                     onGlide = paper::glide,
                     onFingers = { fingers ->
                         if (fingers.isEmpty()) paper.lift()
-                        follow(dents, fingers)
+                        padFingers[0] = fingers
+                        dent()
                         if (anyFinger != fingers.isNotEmpty()) onTouch(fingers.isNotEmpty())
                         anyFinger = fingers.isNotEmpty()
                     },
@@ -412,6 +532,18 @@ internal fun LinkTrackpad(
                 PadButton(session, "left", "Left", RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 20.dp), Modifier.weight(1f), held = held)
                 PadButton(session, "right", "Right", RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomEnd = 20.dp, bottomStart = 12.dp), Modifier.weight(1f))
             }
+        }
+        // one side of the pad scrolls under one finger, as a mouse's wheel (the sheet's Trackpad room sets which side and how)
+        if (config.scrollStrip) {
+            ScrollStrip(
+                session, config, strip, hint = hint, padBusy = anyFinger, onTouched = { viewModel.touched = true },
+                // the strip's finger dents the cloth while it holds it, and the dent springs out as it comes free
+                onCloth = {
+                    stripHold = it
+                    dent()
+                },
+                modifier = Modifier.matchParentSize(),
+            )
         }
     }
 }
@@ -539,6 +671,18 @@ private val RIPPLE_BANDS = floatArrayOf(0.45f, 1f, 0.45f)
  */
 private const val GRIP_DP = 112f
 private val GRIP_FALL = listOf(0f to 0.62f, 0.3f to 0.54f, 0.55f to 0.32f, 0.8f to 0.1f, 1f to 0f)
+
+/**
+ * The cloth drawn taut toward an edge the pointer is pushed against: at most this far, on these
+ * springs (pushed, firm; let go, softer, so it wobbles back); the light at that side reaches this
+ * far, and this much further at the hardest push. Fredde asked for the pad to show the push
+ * (2026-11-21).
+ */
+private const val TAUT_DRAG_DP = 6f
+private const val TAUT_STIFF_IN = 300f
+private const val TAUT_STIFF_OUT = 320f
+private const val TAUT_GLOW_DP = 70f
+private const val TAUT_GLOW_MORE_DP = 110f
 
 /** How long the mark of a sweep stays. */
 private const val SWEEP_SHOWN_MS = 650L

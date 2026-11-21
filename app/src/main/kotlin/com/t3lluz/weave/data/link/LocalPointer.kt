@@ -27,6 +27,14 @@ class LocalPointer {
         private set
     @Volatile var y = 0.5f
         private set
+    /**
+     * Where it is by the moves, not held to the monitor: past 0..1 it has gone to another monitor
+     * the laptop does not report it on ([MonitorEdge] leaves it alone there).
+     */
+    @Volatile var rawX = 0.5f
+        private set
+    @Volatile var rawY = 0.5f
+        private set
     /** Whether there is anywhere to draw it: a report on this monitor has come, and it is on it. */
     @Volatile var shown = false
         private set
@@ -58,20 +66,42 @@ class LocalPointer {
     private var monH = 1f
     private var monitor: String? = null
 
+    /** The monitor [x], [y], [rawX] and [rawY] are about: the screen's own may have moved on already. */
+    val monitorName: String? get() = monitor
+
     /** The link's round trip, for how old a report is when it lands. */
     @Volatile var rttMs = 40
 
-    /** The shown monitor changed (or the picture started): nothing is known about it yet. */
+    /**
+     * The shown monitor changed (or the picture started). Nothing is known about it yet, unless
+     * the pointer is [seed] (0..1 of it): where it went over from the last one, by the moves, so
+     * it is drawn there at once and a quick push on to the next edge is held there too.
+     */
     @Synchronized
-    fun onMonitor(name: String?, width: Float, height: Float) {
+    fun onMonitor(name: String?, width: Float, height: Float, seed: Pair<Float, Float>? = null) {
         if (name == monitor && width == monW && height == monH) return
         monitor = name
         monW = width.coerceAtLeast(1f)
         monH = height.coerceAtLeast(1f)
-        known = false
         pending.clear()
-        publish(0.5f, 0.5f, false)
+        if (seed != null && name != null) {
+            known = true
+            reportX = seed.first.coerceIn(0f, 1f)
+            reportY = seed.second.coerceIn(0f, 1f)
+            predict()
+        } else {
+            known = false
+            publish(0.5f, 0.5f, false)
+        }
     }
+
+    /**
+     * Where the pointer is on the desk by the moves, in the layout's pixels, with [origin] the
+     * shown monitor's place in it; null while nothing is known.
+     */
+    @Synchronized
+    fun onDesk(origin: Pair<Int, Int>): Pair<Float, Float>? =
+        if (!known || monitor == null) null else (origin.first + rawX * monW) to (origin.second + rawY * monH)
 
     /** A move sent to the laptop, in the phone's units, with its number. */
     @Synchronized
@@ -91,6 +121,8 @@ class LocalPointer {
         known = true
         reportX = px
         reportY = py
+        rawX = px
+        rawY = py
         publish(px, py, true)
     }
 
@@ -140,10 +172,16 @@ class LocalPointer {
         val py = reportY + sy * gain / monH
         // past the monitor's edge the laptop's pointer stops (or goes to the next monitor, which
         // the picture follows): draw it at the edge
+        rawX = px
+        rawY = py
         publish(px.coerceIn(0f, 1f), py.coerceIn(0f, 1f), known)
     }
 
     private fun publish(px: Float, py: Float, show: Boolean) {
+        if (!show) {
+            rawX = px
+            rawY = py
+        }
         x = px
         y = py
         shown = show

@@ -41,6 +41,10 @@ import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -161,6 +165,22 @@ fun LinkScreen(
     // the laptop's picture is what the glass over it blurs
     val hazeState = rememberHazeState()
 
+    // The edge between monitors, felt whatever the screen shows (picture, full screen, pad only):
+    // a light tick meeting it, two creaks as the push builds, the snap through it. The bump and the
+    // creaks wait for the slide's ticks if they are still running under the thumb; the snap never does.
+    val edgeHaptics = com.t3lluz.weave.ui.util.rememberHaptics()
+    DisposableEffect(session.edge, edgeHaptics) {
+        val felt: (com.t3lluz.weave.data.link.MonitorEdge.Felt, Int) -> Unit = { f, nth ->
+            when (f) {
+                com.t3lluz.weave.data.link.MonitorEdge.Felt.MET -> if (!edgeHaptics.busy) edgeHaptics.edgeMeet()
+                com.t3lluz.weave.data.link.MonitorEdge.Felt.CREAK -> if (!edgeHaptics.busy) edgeHaptics.creak(nth)
+                com.t3lluz.weave.data.link.MonitorEdge.Felt.FREED -> edgeHaptics.comeFree()
+            }
+        }
+        session.edge.onFelt = felt
+        onDispose { if (session.edge.onFelt === felt) session.edge.onFelt = null }
+    }
+
     var keyView by remember { mutableStateOf<LinkKeyView?>(null) }
     var mods by remember { mutableStateOf(setOf<String>()) }
     var toast by remember { mutableStateOf<String?>(null) }
@@ -247,13 +267,20 @@ fun LinkScreen(
         }
     }
     val immersive = landscape && online
-    LaunchedEffect(immersive, resumed) {
+    // Upright, the navigation bar is hidden too, the sticky way, with its room kept (the layout pads
+    // for it as if it were there). Android lets an app keep the back gesture off only 200 dp of each
+    // side, except while the navigation bar is hidden like this: then the remote keeps it off both
+    // sides top to bottom (systemGestureExclusion below), so a stroke on the pad or the scroll strip
+    // that starts at the edge is never taken for "back" (Fredde, 2026-11-21). A swipe up from the
+    // foot still shows the bars and goes home, as it must; the back tile leaves the remote.
+    LaunchedEffect(immersive, online, resumed) {
         val bars = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
-        if (immersive) {
+        if (immersive || online) {
             bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (!immersive) bars.show(WindowInsetsCompat.Type.statusBars())
             // asked again once the rotated window has settled: the first ask can land before it has the bars
             repeat(3) {
-                bars.hide(WindowInsetsCompat.Type.systemBars())
+                bars.hide(if (immersive) WindowInsetsCompat.Type.systemBars() else WindowInsetsCompat.Type.navigationBars())
                 delay(350)
             }
         } else {
@@ -534,6 +561,7 @@ internal class LinkActions(
 // ── upright: screen on top, trackpad under it ──────────────────────────────────
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun Upright(
     viewModel: LinkViewModel,
     state: LinkState,
@@ -565,7 +593,6 @@ private fun Upright(
     val showPicture = config.showPicture || !state.canHidePicture
     var clipMenu by remember { mutableStateOf(false) }
     val reconnecting = state.status == LinkStatus.Reconnecting
-    var padDown by remember { mutableStateOf(false) }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Zoomed in (or set to start that way), the picture takes its full share of the screen; at its
@@ -577,23 +604,18 @@ private fun Upright(
         val mon = state.shownMonitor
         val aspect = if (mon != null && mon.width > 0 && mon.height > 0) mon.width.toFloat() / mon.height else 16f / 10f
         val zoomedIn = viewModel.zoom?.let { it > 1.01f } ?: config.fillPreview
-        // A monitor of another shape changes the box once its slide is over, never during it, and
-        // never while a finger is on the pad (its top edge would move under the finger). Zoom acts at once.
         val shape = minOf(most, maxWidth / aspect)
-        var settledShape by remember { mutableStateOf(shape) }
-        LaunchedEffect(shape, padDown) {
-            if (settledShape != shape && !padDown) {
-                delay(AppMotion.Link.SWIPE_SETTLE_MS)
-                settledShape = shape
-            }
-        }
-        val open = if (zoomedIn) most else settledShape
+        val open = if (zoomedIn) most else shape
         // folded away, the screen takes no room at all: the shortcuts and the trackpad have it
+        // The box moves on the panel's spring, at once when the stream goes to a monitor of another shape:
+        // it used to wait for the slide and for the finger to lift, which got in the way (Fredde,
+        // 2026-11-21). The pad under it moves with it, even under a finger: the trackpad takes that
+        // out of the finger's moves (its origin).
         val pictureHeight = animateDpAsState(if (showPicture) open else 0.dp, AppMotion.Link.panel(), label = "picture")
         // the pill names the monitor the pointer is on while there is no picture to name
         val pointer = session.pointer.collectAsState()
         val pointerOn by remember(state.monitors) { derivedStateOf { monitorUnder(state.monitors, pointer.value) } }
-        Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
+        Column(Modifier.fillMaxSize().systemGestureExclusion().windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility).imePadding()) {
             // The top row, in the dock's tiles: back, which laptop and screen (opens the sheet),
             // zoom, and at the far end the tiles that fold the shortcuts and the screen away and
             // bring them back. Each wears its own colour, as the dock's do. Nothing sits on the picture.
@@ -703,7 +725,6 @@ private fun Upright(
                 buttons = !imeVisible,
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(start = TileRow.Side, end = TileRow.Side, top = 6.dp),
                 nativePad = LinkSession.TOUCHPAD in state.caps,
-                onTouch = { padDown = it },
             )
             AnimatedVisibility(
                 visible = imeVisible,
@@ -802,7 +823,8 @@ private fun Sideways(
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // the back gesture is kept off both sides top to bottom here too (the bars are hidden: see LinkScreen)
+    BoxWithConstraints(Modifier.fillMaxSize().systemGestureExclusion()) {
         // Where the panel's bubble rests, and which way the panel unfolds from there.
         val density = LocalDensity.current
         val holes = cameraHoles()

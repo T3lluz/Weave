@@ -17,7 +17,7 @@
 ## Features
 
 - **The screen, live:** every monitor. Pinch to zoom. The view follows the pointer and slides across when the pointer moves to another monitor.
-- **A trackpad that keeps up:** the phone draws the pointer itself, so it moves the moment your finger does. One finger moves, a tap clicks, two fingers scroll, a two-finger tap is the right button, and two fingers swept sideways go back and forward.
+- **A trackpad that keeps up:** the phone draws the pointer itself, so it moves the moment your finger does. One finger moves, a tap clicks, two fingers scroll (or one, along the scroll strip at the pad's edge), a two-finger tap is the right button, and two fingers swept sideways go back and forward.
 - **Hold to drag, with any finger:** once a held finger has taken hold, another can carry what you hold while the first stays put. The drag ends when the last finger lifts.
 - **You can feel it:** the pad has a faint grain under your finger, its buttons click down and up, and a shortcut of several steps says when it is done.
 - **Your phone's keyboard:** autocorrect, swipe typing and any language, typed on the computer. It comes up by itself when a click lands in a text field.
@@ -62,6 +62,8 @@ The computer side has its own page: [`computer/`](computer/README.md).
 | Two-finger tap, three-finger tap | Right button, middle button |
 | Hold, then move | Drag. Any finger carries it once it has hold |
 | Two fingers | Scroll |
+| One finger along the scroll strip | Pull it free of the cloth, then scroll, a tick per notch. Left or right edge, set in the sheet |
+| Push the pointer past a monitor's edge | It holds there with a peek of the next monitor; push on to cross |
 | Two fingers swept sideways | Back and forward |
 | **Left** and **Right** at the pad's foot | Hold a mouse button down while another finger moves |
 | Tap the screen | Click there |

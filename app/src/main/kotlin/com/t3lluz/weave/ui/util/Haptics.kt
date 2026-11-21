@@ -33,12 +33,27 @@ private const val SLIDE_LANDS_FIRM = 0.55f
  */
 private const val MOTOR_LAG_MS = 4
 
+/** How long a phrase rings on past what the motor says it takes, kept clear of the grain. */
+private const val RING_ON_MS = 40
+
 /**
  * Until when (uptime, ms) a phrase is playing that the trackpad's grain must leave alone: a new
  * vibration replaces the one playing, and a cancel ends whichever that is.
  */
 @Volatile private var phraseUntil = 0L
 private fun phrasePlaying() = android.os.SystemClock.uptimeMillis() < phraseUntil
+
+/**
+ * Counts the phrases played. A phrase replaces whatever the motor was playing, the trackpad's
+ * grain included, so the grain starts afresh once one has played over it.
+ */
+@Volatile private var phrases = 0
+
+/** A phrase is playing for [ms] from now: the grain keeps out of its way until it is done. */
+private fun phraseFor(ms: Int) {
+    phraseUntil = maxOf(phraseUntil, android.os.SystemClock.uptimeMillis() + ms)
+    phrases++
+}
 
 /**
  * Centralized haptic feedback helper optimised for Pixel devices.
@@ -69,10 +84,19 @@ class HapticHelper(
         if (Build.VERSION.SDK_INT < 33) return false
         val m = motor ?: return false
         return try {
-            if (!m.areAllPrimitivesSupported(*beats.map { it.block }.distinct().toIntArray())) return false
+            val blocks = beats.map { it.block }.distinct().toIntArray()
+            if (!m.areAllPrimitivesSupported(*blocks)) return false
+            val takes = m.getPrimitiveDurations(*blocks)
             val made = android.os.VibrationEffect.startComposition()
-            for (beat in beats) made.addPrimitive(beat.block, beat.firm, beat.afterMs)
+            var long = 0
+            for (beat in beats) {
+                made.addPrimitive(beat.block, beat.firm, beat.afterMs)
+                long += beat.afterMs + takes[blocks.indexOf(beat.block)] + MOTOR_LAG_MS
+            }
             m.vibrate(made.compose(), android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
+            // the trackpad's grain, playing while a finger glides, would cut it off at its next stretch
+            // (and a little longer than the motor says: a firm click rings on a little)
+            phraseFor(long + RING_ON_MS)
             true
         } catch (_: RuntimeException) {
             false
@@ -164,8 +188,11 @@ class HapticHelper(
      */
     fun slideOver() {
         val runs = inTime(slideBeats)
-        if (runs != null) phraseUntil = android.os.SystemClock.uptimeMillis() + runs else slide()
+        if (runs != null) phraseFor(runs) else slide()
     }
+
+    /** A phrase is playing that a lesser one should not cut off (the slide's ticks under the thumb). */
+    val busy: Boolean get() = phrasePlaying()
 
     private val slideBeats by lazy {
         SLIDE_TICKS.map { (share, firm) -> Timed(TICK, firm, com.t3lluz.weave.ui.theme.AppMotion.Link.swipeMs(share)) } +
@@ -180,6 +207,54 @@ class HapticHelper(
     /** A slider crossed one of its marks: the faintest tick there is. */
     fun notch() {
         if (!phrase(Beat(LOW_TICK, 0.35f))) tick()
+    }
+
+    /** The pointer meets the edge between two monitors, which holds it: one light, clear tick. */
+    fun edgeMeet() {
+        if (!phrase(Beat(TICK, 0.32f))) tick()
+    }
+
+    /** A finger meets the scroll strip: the lightest tick, the cloth under it. */
+    fun stripTouch() {
+        phrase(Beat(TICK, 0.2f))
+    }
+
+    /**
+     * Pulled or pushed part way to coming free (the scroll strip off its cloth, the pointer over a
+     * monitor's edge): a faint, low creak of the give, the [nth] (from 0) firmer than the one before.
+     */
+    fun creak(nth: Int) {
+        phrase(Beat(LOW_TICK, (0.16f + 0.1f * nth).coerceAtMost(0.5f)))
+    }
+
+    /**
+     * Come free (the scroll strip off its cloth, the pointer through a monitor's edge): a firm snap,
+     * then a low settle, as a notification gives when it comes loose from its list.
+     */
+    fun comeFree() {
+        if (!phrase(Beat(CLICK, 0.85f), Beat(LOW_TICK, 0.38f, 34))) thresholdActivate()
+    }
+
+    /**
+     * A tap on the held strip, which only a pull frees: two soft low bumps, the second fainter, a
+     * gentle "not like that". No plain fallback: the system's reject is far too stern for it.
+     */
+    fun stripDecline() {
+        phrase(Beat(LOW_TICK, 0.32f), Beat(LOW_TICK, 0.2f, 70))
+    }
+
+    /** Let go before it came free: the cloth's give let out, softly. */
+    fun stripRecoil() {
+        phrase(Beat(QUICK_FALL, 0.24f))
+    }
+
+    /**
+     * The scroll strip turned past a notch: one faint tick, [firm] (0..1) as firm as the turn is
+     * meant to feel; under 0.03 it is not felt and not played. There is no plain fallback: the
+     * system's ticks are far firmer, and a stream of them would buzz.
+     */
+    fun stripNotch(firm: Float) {
+        if (firm >= 0.03f) phrase(Beat(TICK, firm.coerceAtMost(1f)))
     }
 
     /** A computer taken off the list: one dull thud. */
@@ -491,13 +566,21 @@ class PaperFeel(context: android.content.Context) {
         return least.coerceIn(10L, 40L).toInt()
     }
 
+    /** The phrases counted when the grain last played: one since has replaced it on the motor. */
+    private var heard = phrases
+
     fun glide(dp: Float) {
         if (!can) return
         main.removeCallbacks(rest)
         main.postDelayed(rest, grain.restMs)
-        val stretch = grain.glide(dp) ?: return
-        // a phrase is playing (the picture sliding to another monitor): it is not cut off for the grain
+        // a phrase is playing (a tick, a snap, the picture sliding to another monitor): it is not cut off for the grain
         if (phrasePlaying()) return
+        // one played over the grain and replaced it: the grain comes back up from faint, as at a stroke's start
+        if (heard != phrases) {
+            heard = phrases
+            grain.rested()
+        }
+        val stretch = grain.glide(dp) ?: return
         // an empty stretch: the finger has slowed to a creep, and the grain goes with it
         if (stretch.steps.isEmpty()) runCatching { vibrator?.cancel() } else play(stretch)
     }

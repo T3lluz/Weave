@@ -2,6 +2,12 @@ package com.t3lluz.weave.ui.screens.link
 
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.geometry.Offset
+import com.t3lluz.weave.data.link.MonitorEdge
+import com.t3lluz.weave.data.link.pushing
+import kotlin.math.abs
+import kotlin.math.exp
 import androidx.compose.foundation.Canvas
 import android.annotation.SuppressLint
 import android.content.Context
@@ -119,11 +125,39 @@ internal fun LinkPreview(
     var awaited by remember { mutableIntStateOf(0) }
     val slide = remember { Animatable(1f) }
 
+    // The peek of the monitor the pointer is pushed toward ([MonitorEdge]): how far it is in (0 to
+    // about a sixth of the box), which way, and which monitor. When the edge lets the pointer
+    // through, the peek holds, a little further in, until that monitor's picture lands, and the
+    // slide carries on from there ([startAt]) instead of starting over.
+    val edge = session.edge
+    val follow = session.state.collectAsState().value.followPointer
+    val peek = remember { mutableFloatStateOf(0f) }
+    var peekDir by remember { mutableStateOf(0 to 0) }
+    var peekName by remember { mutableStateOf<String?>(null) }
+    var heldPeek by remember { mutableFloatStateOf(0f) }
+    var heldUntil by remember { mutableLongStateOf(0L) }
+    var startAt by remember { mutableFloatStateOf(0f) }
+    // and where the picture it leaves had got to, which carries on from there too
+    var outAt by remember { mutableFloatStateOf(0f) }
+    // the peek's speed, for its spring
+    val peekSpeed = remember { floatArrayOf(0f) }
+
     DisposableEffect(video, geometry, reduced) {
         val grab: (Int, Int, Int) -> Unit = { dx, dy, id ->
             // already drawn by the time this ran (a slow main thread): nothing to slide from
             val late = video.switched.value >= id
             val shot = if (late) null else view?.takeIf { it.isAvailable && it.width > 0 && it.height > 0 }?.bitmap
+            // kept as the monitor's last picture, for a peek of it later
+            session.state.value.let { it.shown ?: it.monitor }?.let { name -> shot?.let { video.stills[name] = it } }
+            // a switch the pointer was pushed into, the way the peek shows: both pictures carry on from where the peek had them
+            val q = peek.floatValue
+            if (!reduced && shot != null && peekDir == (dx to dy) && q > 0.005f) {
+                startAt = (q * PEEK_OVER).coerceAtMost(0.9f)
+                outAt = (q * PEEK_OUT).coerceAtMost(startAt)
+            } else {
+                startAt = 0f
+                outAt = 0f
+            }
             still = shot?.let {
                 Still(
                     it.asImageBitmap(), geometry.fitW, geometry.fitH, geometry.zoomState.floatValue,
@@ -144,8 +178,12 @@ internal fun LinkPreview(
     LaunchedEffect(switched, awaited) {
         if (!waiting || switched < awaited) return@LaunchedEffect
         val mine = still
-        slide.snapTo(0f)
+        slide.snapTo(startAt)
         waiting = false
+        // the new picture stands where the peek did: the peek is done
+        peek.floatValue = 0f
+        peekSpeed[0] = 0f
+        heldUntil = 0L
         if (reduced || mine == null || (mine.dx == 0 && mine.dy == 0)) {
             // one picture fading into the other: nothing travels, one soft step
             haptics.slide()
@@ -156,7 +194,11 @@ internal fun LinkPreview(
             slide.animateTo(1f, AppMotion.Link.swipe())
         }
         // a switch that came on top of this one has its own still: leave it
-        if (still === mine) still = null
+        if (still === mine) {
+            still = null
+            startAt = 0f
+            outAt = 0f
+        }
     }
     // the picture stopped: drop any still from a switch in flight, so the cover shows why at once
     LaunchedEffect(error) {
@@ -166,6 +208,64 @@ internal fun LinkPreview(
             slide.snapTo(1f)
         }
     }
+    // The peek follows the push each frame: in quickly, back a little slower, held while the edge
+    // has let the pointer through and its monitor's picture is on its way.
+    LaunchedEffect(edge, follow, reduced) {
+        var last = 0L
+        var freed = edge.freedAt
+        while (true) withFrameNanos { t ->
+            // the edge let the pointer through: the peek pops on a little and holds for the new picture
+            if (edge.freedAt != freed) {
+                freed = edge.freedAt
+                if (follow && !reduced) {
+                    peekDir = edge.dirX to edge.dirY
+                    peekName = edge.beyond
+                    heldPeek = (peek.floatValue + PEEK_POP).coerceAtMost(PEEK_MAX + PEEK_POP)
+                    heldUntil = android.os.SystemClock.uptimeMillis() + PEEK_HOLD_MS
+                }
+            }
+            val dt = if (last == 0L) 16f else ((t - last) / 1_000_000f).coerceIn(1f, 50f)
+            last = t
+            val now = android.os.SystemClock.uptimeMillis()
+            val target = when {
+                !follow || reduced -> 0f
+                waiting || still != null -> peek.floatValue
+                now < heldUntil -> heldPeek
+                edge.pushing(now) -> {
+                    peekDir = edge.dirX to edge.dirY
+                    peekName = edge.beyond
+                    peekFor(edge.push)
+                }
+                else -> 0f
+            }
+            // a spring, a little under-damped: the peek leans in with a small bounce, pops on as the
+            // edge lets go, and wobbles back past rest when the push is given up
+            var q = peek.floatValue
+            var v = peekSpeed[0]
+            if (waiting || still != null) {
+                v = 0f
+            } else {
+                val stiff = if (target > 0f) PEEK_STIFF_IN else PEEK_STIFF_OUT
+                val damp = 2f * PEEK_DAMPING * kotlin.math.sqrt(stiff)
+                var left = dt / 1000f
+                while (left > 0f) {
+                    val h = minOf(left, 0.004f)
+                    v += (stiff * (target - q) - damp * v) * h
+                    q += v * h
+                    left -= h
+                }
+                q = q.coerceIn(-PEEK_BELOW, PEEK_MAX * 2f)
+                if (target == 0f && abs(q) < 0.0006f && abs(v) < 0.004f) {
+                    q = 0f
+                    v = 0f
+                }
+            }
+            peek.floatValue = q
+            peekSpeed[0] = v
+            if (q == 0f && !waiting && still == null && peekName != null) peekName = null
+        }
+    }
+
     // a switch whose new picture never comes lets go of the old one; each switch gets its own wait
     LaunchedEffect(waiting, awaited) {
         if (!waiting) return@LaunchedEffect
@@ -198,40 +298,7 @@ internal fun LinkPreview(
         val boxW = constraints.maxWidth.toFloat()
         val boxH = constraints.maxHeight.toFloat()
 
-        AndroidView(
-            factory = { LinkTextureView(it, video).also { v -> view = v } },
-            modifier = Modifier
-                .align(Alignment.Center)
-                .size(with(density) { fitW.toDp() }, with(density) { fitH.toDp() })
-                .graphicsLayer {
-                    val z = geometry.zoomState.floatValue
-                    var tx = (0.5f - geometry.centerX.floatValue) * fitW * z
-                    var ty = (0.5f - geometry.centerY.floatValue) * fitH * z
-                    var depth = 1f
-                    alpha = 1f
-                    val s = still
-                    val p = slide.value
-                    if (waiting) {
-                        alpha = 0f
-                    } else if (s != null) {
-                        // until the slide ends (the spring is critically damped: it never passes the middle)
-                        if (s.dx == 0 && s.dy == 0) {
-                            alpha = p.coerceIn(0f, 1f)
-                        } else {
-                            // arriving from the side the pointer went to
-                            tx += s.dx * boxW * (1f - p)
-                            ty += s.dy * boxH * (1f - p)
-                            depth = 1f - AppMotion.Link.SWIPE_DEPTH * (1f - p).coerceIn(0f, 1f)
-                        }
-                    }
-                    scaleX = z * depth
-                    scaleY = z * depth
-                    translationX = tx
-                    translationY = ty
-                    motionBlur(s, if (waiting || s == null) 0f else slide.velocity)
-                },
-        )
-
+        // the old monitor's picture, under the new one, as the switch carries it away
         still?.let { s ->
             Image(
                 bitmap = s.image,
@@ -241,7 +308,12 @@ internal fun LinkPreview(
                     .align(Alignment.Center)
                     .size(with(density) { s.fitW.toDp() }, with(density) { s.fitH.toDp() })
                     .graphicsLayer {
-                        val p = if (waiting) 0f else slide.value
+                        // a switch that carries on from the peek starts where it had this picture, and catches up
+                        val p = when {
+                            startAt <= 0f -> if (waiting) 0f else slide.value
+                            waiting -> outAt
+                            else -> outAt + (1f - outAt) * ((slide.value - startAt) / (1f - startAt)).coerceIn(0f, 1f)
+                        }
                         var tx = (0.5f - s.centerX) * s.fitW * s.zoom
                         var ty = (0.5f - s.centerY) * s.fitH * s.zoom
                         var depth = 1f
@@ -263,6 +335,102 @@ internal fun LinkPreview(
             )
         }
 
+        AndroidView(
+            factory = { LinkTextureView(it, video).also { v -> view = v } },
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(with(density) { fitW.toDp() }, with(density) { fitH.toDp() })
+                .graphicsLayer {
+                    val z = geometry.zoomState.floatValue
+                    var tx = (0.5f - geometry.centerX.floatValue) * fitW * z
+                    var ty = (0.5f - geometry.centerY.floatValue) * fitH * z
+                    var depth = 1f
+                    alpha = 1f
+                    val s = still
+                    val p = slide.value
+                    if (waiting) {
+                        alpha = 0f
+                    } else if (s == null) {
+                        // pushed against the edge: it gives way a little to the next monitor coming over it
+                        val q = peek.floatValue * PEEK_OUT
+                        if (q != 0f) {
+                            tx -= peekDir.first * boxW * q
+                            ty -= peekDir.second * boxH * q
+                            depth = 1f - AppMotion.Link.SWIPE_DEPTH * q.coerceAtLeast(0f)
+                        }
+                    } else {
+                        // until the slide ends (the spring is critically damped: it never passes the middle)
+                        if (s.dx == 0 && s.dy == 0) {
+                            alpha = p.coerceIn(0f, 1f)
+                        } else {
+                            // arriving from the side the pointer went to
+                            tx += s.dx * boxW * (1f - p)
+                            ty += s.dy * boxH * (1f - p)
+                            depth = 1f - AppMotion.Link.SWIPE_DEPTH * (1f - p).coerceIn(0f, 1f)
+                        }
+                    }
+                    scaleX = z * depth
+                    scaleY = z * depth
+                    translationX = tx
+                    translationY = ty
+                    motionBlur(s, if (waiting || s == null) 0f else slide.velocity)
+                },
+        )
+
+        // The peek: the next monitor's last picture (or the weave, for one not seen yet) coming over
+        // the current one from the side the pointer is pushed to, showing the part of it by the edge.
+        // It comes in further than the current picture gives way, so it lies over it, a card with
+        // a shadow, leaning toward you as it enters and flattening as it comes on. It ends flat and
+        // square where the slide picks it up, so the slide can take it over.
+        peekName?.let { name ->
+            val shot = remember(name, awaited) { video.stills[name]?.asImageBitmap() }
+            val (px, py) = peekDir
+            val corner = with(density) { PEEK_CORNER_DP.dp.toPx() }
+            val lift = with(density) { PEEK_SHADOW_DP.dp.toPx() }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val at = if (waiting) startAt else peek.floatValue * PEEK_OVER
+                        val shown = if (waiting) startAt > 0f else still == null && at > 0f
+                        alpha = if (shown) 1f else 0f
+                        translationX = px * boxW * (1f - at)
+                        translationY = py * boxH * (1f - at)
+                        val depth = 1f - AppMotion.Link.SWIPE_DEPTH * (1f - at)
+                        scaleX = depth
+                        scaleY = depth
+                        // leaning in while it peeks, flat by the time it is all the way on
+                        val lean = (1f - at / ((PEEK_MAX + PEEK_POP) * PEEK_OVER)).coerceIn(0f, 1f)
+                        cameraDistance = 14f * this.density
+                        rotationY = -px * PEEK_LEAN_DEG * lean
+                        rotationX = py * PEEK_LEAN_DEG * lean
+                        shape = RoundedCornerShape(corner * lean)
+                        clip = true
+                        shadowElevation = lift * lean
+                    },
+            ) {
+                if (shot != null) {
+                    Image(
+                        bitmap = shot, contentDescription = null, contentScale = ContentScale.Crop,
+                        alignment = when {
+                            px > 0 -> Alignment.CenterStart
+                            px < 0 -> Alignment.CenterEnd
+                            py > 0 -> Alignment.TopCenter
+                            else -> Alignment.BottomCenter
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().background(Color.Black)) {
+                        com.t3lluz.weave.ui.components.WeaveWaves(
+                            Modifier.matchParentSize(), tone = LinkScreenTone,
+                            origin = Offset(if (px > 0) 0f else if (px < 0) 1f else 0.5f, if (py > 0) 0f else if (py < 0) 1f else 0.5f),
+                        )
+                    }
+                }
+            }
+        }
+
         // the pointer, drawn where the finger has put it; the picture catches up under it
         if (drawPointer) {
             val monW = session.state.collectAsState().value.shownMonitor?.let { m -> (m.layoutWidth.takeIf { it > 0 } ?: m.width).toFloat() } ?: 1920f
@@ -270,7 +438,16 @@ internal fun LinkPreview(
             Canvas(Modifier.fillMaxSize()) {
                 pointerTick.longValue
                 if (!pointer.shown || !live || waiting || still != null) return@Canvas
-                val at = geometry.toBox(pointer.x, pointer.y)
+                var at = geometry.toBox(pointer.x, pointer.y)
+                // the picture gives way to the peek: the pointer, held at its edge, goes with it
+                val q = peek.floatValue * PEEK_OUT
+                if (q != 0f) {
+                    val depth = 1f - AppMotion.Link.SWIPE_DEPTH * q.coerceAtLeast(0f)
+                    at = Offset(
+                        boxW / 2 + (at.x - boxW / 2) * depth - peekDir.first * boxW * q,
+                        boxH / 2 + (at.y - boxH / 2) * depth - peekDir.second * boxH * q,
+                    )
+                }
                 // the laptop's arrow is 48 of its pixels tall: that, at the picture's scale, kept easy to see
                 val scale = geometry.fitW * geometry.zoomState.floatValue / monW
                 val tall = (ARROW_LAPTOP_PX * scale).coerceIn(20.dp.toPx(), 34.dp.toPx()) * pointerSize
@@ -317,6 +494,32 @@ private fun GraphicsLayerScope.motionBlur(still: Still?, velocity: Float) {
     val r = AppMotion.Link.SWIPE_BLUR_DP * density * amount
     renderEffect = if (r < 0.5f) null else BlurEffect(if (still.dx != 0) r else 0.01f, if (still.dy != 0) r else 0.01f, TileMode.Clamp)
 }
+
+/**
+ * The peek of the next monitor (Fredde asked for it playful, the next screen coming over the
+ * current one, 2026-11-21). How far it has come, as [peekFor] gives it for the push: at most
+ * this share of the box, and [PEEK_POP] more once the edge lets go, held up to [PEEK_HOLD_MS]
+ * for the new picture. The next monitor comes in [PEEK_OVER] times that, the current one gives
+ * way [PEEK_OUT] times it, so the next lies over the current. It moves on a spring a little
+ * under-damped, in and out, and may wobble [PEEK_BELOW] past rest on its way back.
+ */
+private const val PEEK_MAX = 0.16f
+private const val PEEK_POP = 0.06f
+private const val PEEK_HOLD_MS = 1_300L
+private const val PEEK_OVER = 1.4f
+private const val PEEK_OUT = 0.55f
+private const val PEEK_STIFF_IN = 260f
+private const val PEEK_STIFF_OUT = 190f
+private const val PEEK_DAMPING = 0.55f
+private const val PEEK_BELOW = 0.025f
+
+/** The peeking card: how far it leans toward you as it enters, its corners and its shadow, all gone by the time it is on. */
+private const val PEEK_LEAN_DEG = 11f
+private const val PEEK_CORNER_DP = 14f
+private const val PEEK_SHADOW_DP = 18f
+
+/** How far in the peek is for a push (0 to 1): quickly at first, less as it goes, as a give does. */
+internal fun peekFor(push: Float): Float = PEEK_MAX * (1f - exp(-push.coerceIn(0f, 1f) * 2.2f)) / (1f - exp(-2.2f))
 
 /** How fast a swipe (in widths a second) has to move for the most blur. */
 private const val BLUR_AT_SPEED = 4.5f

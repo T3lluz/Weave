@@ -382,8 +382,6 @@ object AppMotion {
             return (after * 1000f).toInt()
         }
 
-        /** About how long a slide between monitors takes: the picture's box changes shape after it. */
-        const val SWIPE_SETTLE_MS = 340L
 
         /** A new quality on the same monitor: one picture fades into the other. */
         fun <T> swap(): FiniteAnimationSpec<T> = tween(260, easing = FastOutSlowInEasing)
