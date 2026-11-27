@@ -148,7 +148,7 @@ internal fun LinkPreview(
             val late = video.switched.value >= id
             val shot = if (late) null else view?.takeIf { it.isAvailable && it.width > 0 && it.height > 0 }?.bitmap
             // kept as the monitor's last picture, for a peek of it later
-            session.state.value.let { it.shown ?: it.monitor }?.let { name -> shot?.let { video.stills[name] = it } }
+            session.stillKey()?.let { name -> shot?.let { video.stills[name] = it } }
             // a switch the pointer was pushed into, the way the peek shows: both pictures carry on from where the peek had them
             val q = peek.floatValue
             if (!reduced && shot != null && peekDir == (dx to dy) && q > 0.005f) {

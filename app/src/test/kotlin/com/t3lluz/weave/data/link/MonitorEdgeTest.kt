@@ -57,6 +57,35 @@ class MonitorEdgeTest {
     }
 
     @Test
+    fun theOnlyScreensSideLeadsToTheNextWorkspace() {
+        val e = edge()
+        val one = listOf(a)
+        val spaces = "workspace:1" to "workspace:3"
+        // held at the right side as at a monitor's edge, with the workspace that way beyond
+        val (dx, _) = e.filter(10f, 0f, 0.90f, 0.5f, 1f, a, one, clock, spaces)
+        assertEquals(6f, dx, 0.001f)
+        assertEquals("workspace:3", e.beyond)
+        assertTrue(e.toSpace)
+        var freed: String? = null
+        var pushes = 0
+        while (freed == null && pushes < 60) {
+            clock += 16
+            pushes++
+            // the pointer never goes past the side: the session switches the workspace instead
+            assertEquals(0f, e.filter(10f, 0f, 0.96f, 0.5f, 1f, a, one, clock, spaces).first, 0.001f)
+            freed = e.takeFreedSpace()
+        }
+        assertEquals("workspace:3", freed)
+        assertEquals(MonitorEdge.Felt.FREED, felt.last())
+        assertEquals(null, e.takeFreedSpace())
+        // no workspace to the left, and none up or down: the laptop's own edge
+        e.reset()
+        clock += 1_000
+        assertEquals(-10f, e.filter(-10f, 0f, 0.01f, 0.5f, 1f, a, one, clock, null to "workspace:3").first, 0.001f)
+        assertEquals(10f, e.filter(0f, 10f, 0.5f, 0.97f, 1f, a, one, clock, spaces).second, 0.001f)
+    }
+
+    @Test
     fun anEdgeWithNothingPastItIsLeftToTheLaptop() {
         val e = edge()
         val (dx, _) = e.filter(10f, 0f, 0.98f, 0.5f, 1f, b, desk, clock)

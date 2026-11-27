@@ -98,6 +98,24 @@ class LinkVideo {
         done.await(SNAPSHOT_WAIT_MS, TimeUnit.MILLISECONDS)
     }
 
+    /**
+     * The stream stays, but what it shows is about to change: another workspace of the monitor
+     * shown. Called on the main thread, before the phone asks for it, so the screen grabs the old
+     * picture now; [landed] with the id this returns lets the slide run once the laptop says the
+     * new workspace is on screen. 0 when there is no picture to slide from.
+     */
+    fun announceInPlace(dx: Int, dy: Int): Int {
+        if (!_live.value) return 0
+        val id = ++switchId
+        beforeSwitch?.invoke(dx, dy, id)
+        return id
+    }
+
+    /** The workspace switch [id] is on screen. */
+    fun landed(id: Int) {
+        if (id > _switched.value) _switched.value = id
+    }
+
     /** The laptop said a stream is starting, at this monitor's size. */
     @Synchronized
     fun expect(width: Int, height: Int) {
@@ -201,7 +219,7 @@ class LinkVideo {
                             if (!_live.value) _live.value = true
                             if (armed === c) {
                                 armed = null
-                                _switched.value = armedId
+                                if (armedId > _switched.value) _switched.value = armedId
                                 // a newer switch announced meanwhile is still on its way
                                 if (armedId == switchId) {
                                     switching = false

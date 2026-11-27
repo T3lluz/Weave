@@ -83,6 +83,8 @@ CLIP_PHONES = 8
 
 # how long Hyprland may take to apply a move from weave's mouse before the pointer counts it
 MOVE_SETTLE = 0.003
+# after Hyprland's slide to another workspace, how long its last frames take to be recorded and sent
+SPACE_LAG = 0.12
 # how often the pointer is checked to still be out of the picture (a Hyprland reload puts it back)
 CURSOR_CHECK = 2.0
 # phones that may be waiting for the owner's yes at once
@@ -169,6 +171,9 @@ class Session:
         self.drop_above = DROP_MIN
         self.drops: collections.deque = collections.deque(maxlen=6)   # when the link last fell behind
         self.cursor_task = None
+        # the workspaces of the monitor shown, as the phone was last told: on one screen its
+        # edges take the pointer to the next workspace as they take it to the next monitor
+        self.spaces_told = None
         self.last_cursor = None
         self.last_seq = None
         self.rtt: int | None = None
@@ -581,6 +586,9 @@ class Session:
                     if now and monitor_list(now) != monitor_list(mons):
                         mons = self.mons = now
                         self.send_json({"t": "monitors", "monitors": monitor_list(mons)})
+                if ticks % 10 == 0:
+                    # (one screen's edges lead to its workspaces with the picture folded away too)
+                    await self._tell_spaces()
                 pos = await hypr.cursor()
                 if pos and pos != last:
                     last = pos
@@ -706,11 +714,49 @@ class Session:
                 ticks += 1
                 if ticks % 30 == 0:
                     self._maybe_sharper()
+                if ticks % 10 == 0:
+                    await self._tell_spaces()
                 await self._follow_once()
             except asyncio.CancelledError:
                 raise
             except Exception as err:   # one bad turn must not end following the pointer
                 print(f"weave: following the pointer: {err!r}")
+
+    async def _tell_spaces(self, landed: int | None = None):
+        """The monitor shown's workspaces for the phone, when they changed (or a switch it asked for landed)."""
+        m = self._space_monitor()
+        if not hasattr(hypr, "workspaces") or not m:
+            return
+        name = m["name"]
+        on, ids = await hypr.workspaces(name)
+        told = (name, on, ids)
+        if on is None or (told == self.spaces_told and landed is None):
+            return
+        self.spaces_told = told
+        self.send_json({"t": "spaces", "mon": name, "on": on, "ids": ids, **({"landed": landed} if landed is not None else {})})
+
+    def _space_monitor(self) -> dict | None:
+        """The monitor whose workspaces the phone gets: the only one, or else the one shown."""
+        return self.mons[0] if len(self.mons) == 1 else self.monitor
+
+    async def _to_workspace(self, msg: dict):
+        """The phone pushed the pointer through the edge of its only screen: the next workspace, the
+        pointer at the edge it came in by, and once Hyprland's own slide is over, a word to the
+        phone that the new workspace is on screen (its picture slides in then)."""
+        try:
+            ws = int(msg.get("id"))
+        except (TypeError, ValueError):
+            return
+        await hypr.focus_workspace(ws)
+        m = self._space_monitor()
+        if m and "x" in msg and "y" in msg:
+            x = m["x"] + min(max(float(msg["x"]), 0), 0.999) * m["w"]
+            y = m["y"] + min(max(float(msg["y"]), 0), 0.999) * m["h"]
+            await hypr.move_cursor(int(x), int(y))
+        # and the recorder's frames of its end on their way ahead of the word
+        await asyncio.sleep(await hypr.workspace_slide() + SPACE_LAG)
+        n = msg.get("n")
+        await self._tell_spaces(landed=n if isinstance(n, int) else 0)
 
     async def _follow_once(self):
         """One look at the pointer: tell the phone where it is, and follow it to another monitor."""
@@ -797,6 +843,8 @@ class Session:
         elif t == "click":
             inj.click(msg.get("btn", "left"), int(msg.get("n", 1)))
             d.check_focus(self)
+        elif t == "workspace" and hasattr(hypr, "focus_workspace"):
+            asyncio.create_task(self._to_workspace(msg))
         elif t == "abs" and self.monitor:
             m = self.monitor
             x = m["x"] + min(max(float(msg.get("x", 0)), 0), 0.999) * m["w"]
@@ -1110,7 +1158,9 @@ class Daemon:
             # a touchpad of its own for the phone's fingers, where the system gives one
             "caps": [*shell.CAPS, *(["touchpad"] if getattr(getattr(self, "injector", None), "pad", None) else []),
                      # the earbuds can go over to the phone when they get out of reach (roam.py)
-                     *(["roam"] if roam else [])],
+                     *(["roam"] if roam else []),
+                     # one screen's edges lead to its other workspaces ("spaces", "workspace")
+                     *(["spaces"] if hasattr(hypr, "workspaces") else [])],
             # how far the pointer goes per unit of the phone's moves, so the pointer it draws lands exactly
             "gain": await hypr.pointer_gain(),
             # what the phone needs to wake this laptop from sleep on the same network

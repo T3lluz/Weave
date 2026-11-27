@@ -234,6 +234,9 @@ class LinkSession @Inject constructor(
         desk.forget()
         edge.reset()
         reportedOn = null
+        spaces = null
+        spaceSwitch = 0
+        spaceSlide = 0
     }
 
     /** After the host changed, or to try again by hand. */
@@ -480,7 +483,7 @@ class LinkSession @Inject constructor(
                 // the picture, or with it off, where the pointer is (a tandem that can't say shows the picture)
                 if (prefs.config.value.showPicture || !_state.value.canHidePicture) askForPicture() else send("""{"t":"pointer","on":true}""")
                 // the edges between monitors hold the pointer wherever it is, so the laptop says where on the whole desk
-                if (prefs.config.value.edgeHold && prefs.config.value.showPicture && POINTER in _state.value.caps) send("""{"t":"pointer","on":true}""")
+                if (edgeWantsPointer && prefs.config.value.showPicture && POINTER in _state.value.caps) send("""{"t":"pointer","on":true}""")
                 catalogAsked = 0L
                 // the laptop's setting "start with sound" turns it on from the first frame
                 if (m.optBoolean("laptopSound") && !_state.value.laptopSound) _state.update { it.copy(laptopSound = true) }
@@ -564,6 +567,19 @@ class LinkSession @Inject constructor(
                 _pointer.value = p
                 desk.report(p.x, p.y, android.os.SystemClock.uptimeMillis())
                 monitorUnder(_state.value.monitors, p)?.let { reportedOn = it.name }
+            }
+            "spaces" -> {
+                val ids = m.optJSONArray("ids")
+                spaces = Spaces(
+                    m.optString("mon"), m.optInt("on"),
+                    (0 until (ids?.length() ?: 0)).map { ids!!.optInt(it) },
+                )
+                // the workspace the edge let the pointer through to is on screen: its picture slides in
+                if (m.has("landed") && m.optInt("landed") == spaceSwitch) {
+                    spaceSwitch = 0
+                    if (spaceSlide != 0) video.landed(spaceSlide)
+                    spaceSlide = 0
+                }
             }
             "monitors" -> m.optJSONArray("monitors")?.let { a ->
                 _state.update { it.copy(monitors = monitors(a)) }
@@ -744,6 +760,38 @@ class LinkSession @Inject constructor(
      */
     @Volatile private var reportedOn: String? = null
 
+    /** The workspaces of the monitor shown, as the laptop last said: [on] the one shown, [ids] all it has. */
+    private class Spaces(val monitor: String, val on: Int, val ids: List<Int>)
+
+    @Volatile private var spaces: Spaces? = null
+
+    /** The workspace switch the edge asked for, by its number, until the laptop says it landed; and the picture's slide for it. */
+    @Volatile private var spaceSwitch = 0
+    @Volatile private var spaceSlide = 0
+    private var spaceSwitches = 0
+
+    /**
+     * On a laptop with one screen, the keys of the workspaces left and right of the one shown
+     * ([MonitorEdge]): the nearest lower and higher ids it has.
+     */
+    private fun spaceSides(st: LinkState): Pair<String?, String?>? {
+        if (!prefs.config.value.edgeSpaces) return null
+        val sp = spaces ?: return null
+        val only = st.monitors.singleOrNull() ?: return null
+        if (sp.monitor != only.name || sp.ids.size < 2) return null
+        return sp.ids.filter { it < sp.on }.maxOrNull()?.let(::spaceKey) to sp.ids.filter { it > sp.on }.minOrNull()?.let(::spaceKey)
+    }
+
+    /** What the picture now on screen is kept under among [LinkVideo.stills]: its workspace on a one-screen laptop, else its monitor. */
+    fun stillKey(): String? {
+        val st = _state.value
+        val name = st.shown ?: st.monitor
+        val sp = spaces
+        return if (sp != null && st.monitors.size == 1 && sp.monitor == name) spaceKey(sp.on) else name
+    }
+
+    private fun spaceKey(id: Int) = "workspace:$id"
+
     fun move(dx: Float, dy: Float) {
         val now = android.os.SystemClock.uptimeMillis()
         var sx = dx
@@ -753,9 +801,12 @@ class LinkSession @Inject constructor(
         // Only with the picture showing (Fredde, 2026-11-21): folded away, the pointer crosses as it
         // always did, and nothing on the pad or in the hands says otherwise.
         val pictureShown = prefs.config.value.showPicture || !st.canHidePicture
-        val hold = prefs.config.value.edgeHold && pictureShown && st.monitors.size > 1
+        val sides = spaceSides(st)
+        // (the workspaces of one screen hold with the picture folded away too: Fredde, 2026-11-27)
+        val hold = (prefs.config.value.edgeHold && pictureShown && st.monitors.size > 1) || sides != null
         // just let through: nothing holds it until the laptop says it is on the other side
-        val crossing = now - edge.freedAt < CROSSING_MS && reportedOn != edge.beyond
+        // (for a workspace, until it says the switch landed, when the pointer is at its new place)
+        val crossing = if (edge.toSpace) spaceSwitch != 0 && now - edge.freedAt < SPACE_CROSSING_MS else now - edge.freedAt < CROSSING_MS && reportedOn != edge.beyond
         val guess = if (hold && !crossing) pointerOnDesk(st) else null
         val on = st.monitors.firstOrNull { it.name == reportedOn && it.layoutWidth > 0 } ?: guess?.let { monitorUnder(st.monitors, it) }
         val at = if (guess != null && on != null) {
@@ -766,10 +817,14 @@ class LinkSession @Inject constructor(
         if (at != null && on != null) {
             val (fx, fy) = edge.filter(
                 dx, dy, (at.x - on.x) / on.layoutWidth, (at.y - on.y) / on.layoutHeight,
-                localPointer.gain, on, st.monitors, now,
+                localPointer.gain, on, st.monitors, now, sides,
             )
             sx = fx
             sy = fy
+            edge.takeFreedSpace()?.let { key ->
+                toSpace(key, edge.dirX, (at.y - on.y) / on.layoutHeight, on)
+                return
+            }
         } else if (!crossing) {
             edge.reset()
         }
@@ -780,11 +835,44 @@ class LinkSession @Inject constructor(
         desk.sent(sx, sy, now)
     }
 
+    /**
+     * The edge let the pointer through to the workspace [key], [side] of the one shown: the picture
+     * as it is now is kept to slide from, the laptop switches and puts the pointer at the edge it
+     * enters by, at [y] (0..1) as it was, and says when the new workspace is on screen.
+     */
+    private fun toSpace(key: String, side: Int, y: Float, on: LinkMonitor) {
+        val id = key.removePrefix("workspace:").toIntOrNull() ?: return
+        // a pixel or two in from the edge it enters by, as a monitor is entered, where a push back holds again
+        val x = if (side > 0) MonitorEdge.MARGIN / on.layoutWidth else 1f - (MonitorEdge.MARGIN + 1f) / on.layoutWidth
+        spaceSlide = video.announceInPlace(side, 0)
+        spaceSwitch = ++spaceSwitches
+        sendJson(JSONObject().put("t", "workspace").put("id", id).put("n", spaceSwitch).put("x", round4(x)).put("y", round4(y.coerceIn(0f, 1f))))
+        if (drawsPointer) localPointer.jump(x, y.coerceIn(0f, 1f))
+        desk.jump(on.x + x * on.layoutWidth, on.y + y.coerceIn(0f, 1f) * on.layoutHeight)
+    }
+
+    /** The edges want the pointer's place on the whole desk while they hold, picture or none. */
+    private val edgeWantsPointer: Boolean get() = prefs.config.value.let { it.edgeHold || it.edgeSpaces }
+
+    /** One screen's sides lead to the next workspace, or not. */
+    fun setEdgeSpaces(on: Boolean) {
+        prefs.update { it.copy(edgeSpaces = on) }
+        syncPointerReports()
+        if (!on && edge.toSpace) edge.reset()
+    }
+
+    /** With the picture shown, the laptop says where the pointer is on the desk only while an edge wants it. */
+    private fun syncPointerReports() {
+        if (_state.value.status == LinkStatus.Online && prefs.config.value.showPicture && POINTER in _state.value.caps) {
+            send("""{"t":"pointer","on":$edgeWantsPointer}""")
+        }
+    }
+
     /** The edges between monitors hold the pointer, or not: they need the pointer's place on the whole desk, picture or none. */
     fun setEdgeHold(on: Boolean) {
         prefs.update { it.copy(edgeHold = on) }
-        if (_state.value.status == LinkStatus.Online && prefs.config.value.showPicture) send("""{"t":"pointer","on":$on}""")
-        if (!on) edge.reset()
+        syncPointerReports()
+        if (!on && !edge.toSpace) edge.reset()
     }
     fun scroll(dx: Float, dy: Float) = send("""{"t":"scroll","dx":${round2(dx)},"dy":${round2(dy)}}""")
     /**
@@ -920,7 +1008,7 @@ class LinkSession @Inject constructor(
         prefs.update { it.copy(showPicture = on) }
         if (on) {
             // still wanted while the edges hold: they need the pointer wherever it is
-            if (!prefs.config.value.edgeHold) send("""{"t":"pointer","on":false}""")
+            if (!edgeWantsPointer) send("""{"t":"pointer","on":false}""")
             _state.update { it.copy(videoError = null) }
             askForPicture()
         } else {
@@ -982,6 +1070,8 @@ class LinkSession @Inject constructor(
 
         /** After the edge lets the pointer through, how long it waits at most for the laptop to say it is across. */
         const val CROSSING_MS = 700L
+        /** After it lets the pointer through to another workspace, how long it waits at most for the laptop to say the switch landed. */
+        const val SPACE_CROSSING_MS = 1_500L
         /** This tandem sends its clipboard as it changes, for the phone to keep the two in step. */
         const val CLIP_SYNC = "clipsync"
         /** A copy from the laptop this soon after the phone sent its own was sent before that one landed. */
@@ -990,6 +1080,8 @@ class LinkSession @Inject constructor(
         const val CLIP_AGAIN_MS = 45_000L
         /** This computer has a touchpad of its own for the phone's fingers ("touch"): it reads swipes and pinches itself. */
         const val TOUCHPAD = "touchpad"
+        /** This computer tells the workspaces of the monitor shown, and switches to one asked for ("workspace"). */
+        const val SPACES = "spaces"
     }
 }
 

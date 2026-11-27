@@ -16,6 +16,10 @@ import kotlin.math.abs
  * monitor at its edge, where it was aimed, not a stretch inside it. Along the edge it moves
  * freely while it is held. Going back from the edge, or pausing, lets go of the push.
  *
+ * On a laptop with one screen the same edge leads to the next workspace instead, left and right
+ * (Fredde asked for it, 2026-11-27): held and let go of the same way, but the pointer is not let
+ * through. [takeFreedSpace] names the workspace, and the session switches to it.
+ *
  * Only where the phone knows where the pointer is (it draws it, [LocalPointer]) and the monitors
  * say where they lie. Moves come from the UI thread; the screen reads the fields once a frame.
  */
@@ -30,9 +34,18 @@ class MonitorEdge {
     @Volatile var dirY = 0
         private set
 
-    /** The monitor beyond the edge, by name. */
+    /** The monitor beyond the edge, by name, or the workspace, by its key. */
     @Volatile var beyond: String? = null
         private set
+
+    /** What lies beyond is a workspace of the one screen, not a monitor. */
+    @Volatile var toSpace = false
+        private set
+
+    /** The workspace the push just went through to, for the session to switch to; once. */
+    private var freedSpace: String? = null
+
+    fun takeFreedSpace(): String? = freedSpace.also { freedSpace = null }
 
     /** When (uptime ms) it was last pushed, and when it last let the pointer through. */
     @Volatile var pushedAt = 0L
@@ -58,9 +71,13 @@ class MonitorEdge {
 
     /**
      * The part of a move of ([dx], [dy]) to send, with the pointer at ([x], [y]) on [on] (0..1 of
-     * it), [gain] laptop pixels to a unit of move, among [monitors], at [now].
+     * it), [gain] laptop pixels to a unit of move, among [monitors], at [now]. [spaces] are the keys
+     * of the workspaces left and right of the one shown, on a laptop with one screen.
      */
-    fun filter(dx: Float, dy: Float, x: Float, y: Float, gain: Float, on: LinkMonitor, monitors: List<LinkMonitor>, now: Long): Pair<Float, Float> {
+    fun filter(
+        dx: Float, dy: Float, x: Float, y: Float, gain: Float, on: LinkMonitor, monitors: List<LinkMonitor>, now: Long,
+        spaces: Pair<String?, String?>? = null,
+    ): Pair<Float, Float> {
         val w = on.layoutWidth.toFloat()
         val h = on.layoutHeight.toFloat()
         if (w <= 0f || h <= 0f || gain <= 0f) {
@@ -106,7 +123,10 @@ class MonitorEdge {
         val pastY = beyondY()
         val across = if (first) pastX != null || pastY == null else pastY == null && pastX != null
         val next = if (across) pastX else pastY
-        if (next == null) {
+        // past the side of the only screen: the workspace that way, if it has one
+        val space = if (next == null && across && spaces != null) (if (nx > right) spaces.second else spaces.first) else null
+        val nextName = next?.name ?: space
+        if (nextName == null) {
             // nothing there: the laptop holds the pointer at the edge itself
             reset()
             return dx to dy
@@ -114,11 +134,12 @@ class MonitorEdge {
         val sideX = if (across) (if (nx > right) 1 else -1) else 0
         val sideY = if (across) 0 else (if (ny > bottom) 1 else -1)
         // a push that paused, or one against another edge, starts again
-        if (now - pushedAt > STALE_MS || sideX != dirX || sideY != dirY || next.name != beyond) {
+        if (now - pushedAt > STALE_MS || sideX != dirX || sideY != dirY || nextName != beyond) {
             reset()
             dirX = sideX
             dirY = sideY
-            beyond = next.name
+            beyond = nextName
+            toSpace = next == null
         }
         val met = held == 0f
         // the push counts for at most so much a millisecond, so a quick move is held as surely as a slow one
@@ -133,6 +154,11 @@ class MonitorEdge {
             reset()
             freedAt = now
             onFelt?.invoke(Felt.FREED, 0)
+            if (toSpace) {
+                // the pointer stays on this screen: the session moves it to the edge it enters by
+                freedSpace = nextName
+                return 0f to 0f
+            }
             return if (across) {
                 val past = ((if (sideX > 0) w - 1f + OVER else -OVER) - px) / gain
                 (if (sideX > 0) maxOf(dx, past) else minOf(dx, past)) to dy
@@ -232,6 +258,15 @@ class DeskPointer {
             sy += m.dy
         }
         return onDesk(LinkPointer(rx + sx * gain, ry + sy * gain), monitors)
+    }
+
+    /** The laptop is putting the pointer at ([x], [y]) on the desk: it is there from now on. */
+    @Synchronized
+    fun jump(x: Float, y: Float) {
+        pending.clear()
+        known = true
+        rx = x
+        ry = y
     }
 
     @Synchronized

@@ -112,6 +112,37 @@ async def active_window() -> dict:
         return {}
 
 
+async def workspaces(monitor: str) -> tuple[int | None, list[int]]:
+    """The workspace shown on a monitor and the ordinary ones it has (no special ones), by id."""
+    try:
+        mons = json.loads(await request("j/monitors"))
+        spaces = json.loads(await request("j/workspaces"))
+    except ValueError:
+        return None, []
+    on = next(((m.get("activeWorkspace") or {}).get("id") for m in mons if m.get("name") == monitor), None)
+    ids = sorted({w["id"] for w in spaces if w.get("monitor") == monitor and isinstance(w.get("id"), int) and w["id"] > 0})
+    return on, ids
+
+
+async def focus_workspace(ws: int):
+    await dispatch(f'hl.dsp.focus({{ workspace = "{int(ws)}" }})', f"workspace {int(ws)}")
+
+
+async def workspace_slide() -> float:
+    """How long Hyprland's own slide between workspaces takes, in seconds: its animation's speed is
+    in tenths of a second, taken from the nearest of workspacesIn, workspaces and global that is set."""
+    try:
+        listed = json.loads(await request("j/animations"))
+        anims = {a.get("name"): a for a in (listed[0] if listed and isinstance(listed[0], list) else listed)}
+    except (ValueError, TypeError, AttributeError, IndexError):
+        return 0.3
+    for name in ("workspacesIn", "workspaces", "global"):
+        a = anims.get(name)
+        if a and (a.get("overridden") or name == "global"):
+            return float(a.get("speed", 3)) / 10 if a.get("enabled", True) else 0.0
+    return 0.3
+
+
 async def evaluate(lua: str) -> str:
     return await request(f"eval {lua}")
 

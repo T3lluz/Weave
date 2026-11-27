@@ -129,6 +129,11 @@ internal fun LinkSheet(
                         }
                     }
                 }
+                if (state.monitors.size == 1 && LinkSession.SPACES in state.caps) {
+                    ToggleRow("Next workspace at the edge", "Push past the left or right side to go to the workspace next to this one", config.edgeSpaces, LinkScreenTone) {
+                        session.setEdgeSpaces(!config.edgeSpaces)
+                    }
+                }
                 if (picture) {
                     Spacer(Modifier.height(10.dp))
                     Text("Picture", color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(bottom = 8.dp))

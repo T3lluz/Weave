@@ -48,6 +48,8 @@ data class LinkConfig(
     val showShortcuts: Boolean = true,
     /** The pointer stops at the edge between two monitors, and a little more push takes it across, with a peek of the next ([MonitorEdge]). */
     val edgeHold: Boolean = true,
+    /** On a laptop with one screen, its left and right sides lead to the next workspace the same way, picture shown or not. */
+    val edgeSpaces: Boolean = true,
     /** The phone draws the pointer itself, where the finger puts it, and the laptop's is left out of the picture. */
     val localPointer: Boolean = true,
     /** The phone's keyboard works as in any app: suggestions, autocorrect, swiping. Plain keys in a terminal. */
@@ -199,6 +201,7 @@ class LinkPrefs @Inject constructor(
             putBoolean("showShortcuts", next.showShortcuts)
             putBoolean("localPointer", next.localPointer)
             putBoolean("edgeHold", next.edgeHold)
+            putBoolean("edgeSpaces", next.edgeSpaces)
             putBoolean("nativeKeyboard", next.nativeKeyboard)
             putFloat("pointerSize", next.pointerSize)
             putString("wakeMac", next.wakeMac)
@@ -231,6 +234,7 @@ class LinkPrefs @Inject constructor(
             showShortcuts = prefs.getBoolean("showShortcuts", d.showShortcuts),
             localPointer = prefs.getBoolean("localPointer", d.localPointer),
             edgeHold = prefs.getBoolean("edgeHold", d.edgeHold),
+            edgeSpaces = prefs.getBoolean("edgeSpaces", d.edgeSpaces),
             nativeKeyboard = prefs.getBoolean("nativeKeyboard", d.nativeKeyboard),
             pointerSize = prefs.getFloat("pointerSize", d.pointerSize),
             wakeMac = prefs.getString("wakeMac", d.wakeMac).orEmpty(),
